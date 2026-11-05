@@ -1003,31 +1003,37 @@ std::string GearHubParams::Warning() const {
 namespace {
 
 // Extrudes the sketch by depth, with a dimension between the two copies of
-// the point pt so that the depth can be changed later.
+// the point pt so that the depth can be changed later. Given a face, the
+// far copy of pt lies on that face instead, so that the extrusion ends
+// where the face is.
 Group *AddExtrusion(hGroup sketch, hEntity pt, Vector depth, Group::CombineAs combine,
-                    const char *name, bool twoSided = false) {
+                    const char *name, hEntity toFace = Entity::NO_ENTITY) {
     Group g = NewGroup(Group::Type::EXTRUDE, name);
     g.opA = sketch;
     g.predef.entityB = SK.GetGroup(sketch)->activeWorkplane;
-    g.subtype = twoSided ? Group::Subtype::TWO_SIDED : Group::Subtype::ONE_SIDED;
+    g.subtype = Group::Subtype::ONE_SIDED;
     g.meshCombine = combine;
     // No solid until the depth is set; the default one only costs time.
     g.suppress = true;
     Group *gg = InsertGroup(g);
-    // A one-sided extrusion goes twice as far as its vector, a two-sided one
-    // as far as its vector to each side.
-    gg->ExtrusionForceVectorTo(twoSided ? depth : depth.ScaledBy(0.5));
-    if(twoSided) depth = depth.ScaledBy(2);
+    // A one-sided extrusion goes twice as far as its vector.
+    gg->ExtrusionForceVectorTo(depth.ScaledBy(0.5));
     gg->suppress = false;
 
     Constraint c = {};
     c.group = gg->h;
     c.workplane = Entity::FREE_IN_3D;
-    c.type = Constraint::Type::PT_PT_DISTANCE;
-    c.ptA = gg->Remap(pt, Group::REMAP_BOTTOM);
-    c.ptB = gg->Remap(pt, Group::REMAP_TOP);
-    c.valA = depth.Magnitude();
-    c.disp.offset = depth.Normal(0).WithMagnitude(depth.Magnitude());
+    if(toFace.v != 0) {
+        c.type = Constraint::Type::PT_ON_FACE;
+        c.ptA = gg->Remap(pt, Group::REMAP_TOP);
+        c.entityA = toFace;
+    } else {
+        c.type = Constraint::Type::PT_PT_DISTANCE;
+        c.ptA = gg->Remap(pt, Group::REMAP_BOTTOM);
+        c.ptB = gg->Remap(pt, Group::REMAP_TOP);
+        c.valA = depth.Magnitude();
+        c.disp.offset = depth.Normal(0).WithMagnitude(depth.Magnitude());
+    }
     Constraint::AddConstraint(&c, /*rememberForUndo=*/false);
     SS.MarkGroupDirty(gg->h);
     return SK.GetGroup(c.group);
@@ -1346,14 +1352,14 @@ bool GearAddRackSolid(hRequest hr, const GearRackSolidParams &sp, std::string *e
     }
     SS.GW.activeGroup = insertAfter;
 
-    AddExtrusion(sketch, hr.entity(1), n.ScaledBy(sp.width), Group::CombineAs::UNION,
-                 "rack-body");
+    Group *body = AddExtrusion(sketch, hr.entity(1), n.ScaledBy(sp.width),
+                               Group::CombineAs::UNION, "rack-body");
+    hEntity bodyTop = body->Remap(Entity::NO_ENTITY, Group::REMAP_TOP);
 
     auto holeAt = [&](int i) { return len * (2*i + 1) / (2 * sp.holes); };
     if(sp.mount == Mount::INSERT) {
         // Drawn on the back, with u across the rack and v along it, and cut
-        // in from both sides of the back so that no face of the hole lies on
-        // the back.
+        // in from there by the depth of the holes.
         hEntity back = GearFindRackBackLine(hr).entity(2);
         Group *hs = AddSketch(Quaternion::From(n, xd), back, "rack-insert-sketch");
         hEntity origin = hs->h.entity(2);
@@ -1376,10 +1382,11 @@ bool GearAddRackSolid(hRequest hr, const GearRackSolidParams &sp, std::string *e
             if(i == 0) first = hole;
         }
         AddExtrusion(SS.GW.activeGroup, first.entity(1), yd.ScaledBy(sp.holeDepth),
-                     Group::CombineAs::DIFFERENCE, "rack-insert-holes", /*twoSided=*/true);
+                     Group::CombineAs::DIFFERENCE, "rack-insert-holes");
     } else if(sp.mount == Mount::CROSS) {
-        // Drawn in the plane of the rack, in the middle of the back, and cut
-        // through the whole width and beyond.
+        // Drawn in the plane of the rack, on the bottom face of the body, in
+        // the middle of the back, and cut up to the top face, so that the
+        // holes go through also when the width changes.
         AddSketch(q, hr.entity(1), "rack-holes-sketch");
         hRequest first = {};
         for(int i = 0; i < sp.holes; i++) {
@@ -1387,8 +1394,8 @@ bool GearAddRackSolid(hRequest hr, const GearRackSolidParams &sp, std::string *e
             hRequest hole = AddPlacedCircle(pitch.entity(0), hr.entity(1), c, sp.holeDiameter);
             if(i == 0) first = hole;
         }
-        AddExtrusion(SS.GW.activeGroup, first.entity(1), n.ScaledBy(sp.width + 1.0),
-                     Group::CombineAs::DIFFERENCE, "rack-holes", /*twoSided=*/true);
+        AddExtrusion(SS.GW.activeGroup, first.entity(1), n.ScaledBy(sp.width),
+                     Group::CombineAs::DIFFERENCE, "rack-holes", bodyTop);
     }
 
     SS.MarkGroupDirty(sketch);

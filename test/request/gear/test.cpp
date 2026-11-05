@@ -950,6 +950,12 @@ TEST_CASE(rack_solid_inserts) {
         }
     }
     CHECK_TRUE(onFloor > 0);
+    // The depth dimension is the depth of the holes.
+    for(const Constraint &c : SK.constraint) {
+        if(c.group == last->h && c.type == Constraint::Type::PT_PT_DISTANCE) {
+            CHECK_EQ_EPS(c.valA, sp.holeDepth);
+        }
+    }
 
     // A new back thickness moves the line to the back along.
     SK.GetRequest(hr)->gear.rackBase = 9;
@@ -974,6 +980,23 @@ TEST_CASE(rack_solid_cross_holes) {
     CHECK_TRUE(IsWatertight(m));
     double r = sp.holeDiameter / 2;
     double expected = (RackArea(hr) - sp.holes * PI * r * r) * sp.width;
+    CHECK_TRUE(fabs(m->CalculateVolume() / expected - 1) < 3e-3);
+    CHECK_TRUE(last->solved.how == SolveResult::OKAY);
+    CHECK_TRUE(last->solved.dof == 0);
+
+    // A wider rack still has the holes through.
+    for(Constraint &c : SK.constraint) {
+        if(c.group == GroupNamed("rack-body")->h && c.type == Constraint::Type::PT_PT_DISTANCE) {
+            c.valA = 11;
+        }
+    }
+    SS.MarkGroupDirty(GroupNamed("rack-body")->h);
+    SS.GenerateAll(SolveSpaceUI::Generate::ALL);
+    last = GroupNamed("rack-holes");
+    last->GenerateDisplayItems();
+    m = &last->displayMesh;
+    CHECK_TRUE(IsWatertight(m));
+    expected = (RackArea(hr) - sp.holes * PI * r * r) * 11;
     CHECK_TRUE(fabs(m->CalculateVolume() / expected - 1) < 3e-3);
 }
 
