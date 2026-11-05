@@ -106,6 +106,9 @@ static const double GEAR_INSERT_LENGTH = 5.7;
 // Where GearAddHub puts its groups: true after the active group, false
 // right after the sketch of the gear.
 static const bool GEAR_HUB_AFTER_ACTIVE_GROUP = true;
+// Where GearAddMate puts the sketch of the mating gear: true after the
+// active group, false after all other groups.
+static const bool GEAR_MATE_AFTER_ACTIVE_GROUP = true;
 
 class hRequest;
 class hConstraint;
@@ -117,7 +120,8 @@ class hConstraint;
 void GearSyncLinked(hRequest hr);
 
 // Adds a gear with the given number of teeth that meshes with the gear
-// driver, to the right of it, and a distance constraint between the
+// driver, to the right of it, in a new sketch after the active group (see
+// GEAR_MATE_AFTER_ACTIVE_GROUP), and a distance constraint between the
 // centers. Returns the new request, or a null handle with an error shown.
 hRequest GearAddMate(hRequest driver, int teeth);
 

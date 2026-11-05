@@ -533,9 +533,20 @@ hRequest GearAddMate(hRequest hd, int teeth) {
     Vector u = q.RotationU(), v = q.RotationV();
     Vector c1 = SK.GetEntity(hd.entity(1))->PointGetNum();
 
-    // The mate gets a sketch of its own in the plane of the driver, after
-    // all other groups, so that it can be extruded and get a hub of its own.
-    SS.GW.activeGroup = SK.groupOrder[SK.groupOrder.n - 1];
+    // The mate gets a sketch of its own in the plane of the driver, so that
+    // it can be extruded and get a hub of its own. The sketch follows the
+    // active group, as with the Group menu. Set GEAR_MATE_AFTER_ACTIVE_GROUP
+    // to false to put it after all other groups instead.
+    if(GEAR_MATE_AFTER_ACTIVE_GROUP) {
+        Group *active = SK.group.FindByIdNoOops(SS.GW.activeGroup);
+        if(active == NULL || active->order < SK.GetGroup(driver->group)->order) {
+            Error(_("Activate the sketch of the gear or a later group to add a "
+                    "mating gear."));
+            return {};
+        }
+    } else {
+        SS.GW.activeGroup = SK.groupOrder[SK.groupOrder.n - 1];
+    }
     Group *sketch = AddSketch(q, hd.entity(1), "mating-gear");
     hGroup hs = sketch->h;
     hEntity wrkpl = sketch->activeWorkplane;

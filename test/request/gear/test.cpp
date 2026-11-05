@@ -599,3 +599,28 @@ TEST_CASE(hub_after_active_group) {
     CHECK_TRUE(SK.GetGroup(mateSketch)->IsVisible());
     CHECK_TRUE(SK.GetGroup(mateSketch)->order < GroupNamed("gear")->order);
 }
+
+// The sketch of a mating gear follows the active group, also when that is
+// not the last one. A group before the sketch of the gear cannot take one.
+TEST_CASE(mate_after_active_group) {
+    if(!GEAR_MATE_AFTER_ACTIVE_GROUP) return;
+    CHECK_LOAD("normal.slvs");
+    hGroup sketch = SK.GetRequest(GEAR_REQUEST)->group;
+    SS.GW.activeGroup = Group::HGROUP_REFERENCES;
+    CHECK_TRUE(GearAddMate(GEAR_REQUEST, 30).v == 0);
+
+    std::string error;
+    SS.GW.activeGroup = sketch;
+    CHECK_TRUE(GearAddHub(GEAR_REQUEST, GearHubParams::Default(GearEntity()->gear), &error));
+    // Back to the gear extrusion, and a mate after it, before the hub.
+    SS.GW.activeGroup = GroupNamed("gear")->h;
+    hRequest hm = GearAddMate(GEAR_REQUEST, 30);
+    CHECK_TRUE(hm.v != 0);
+    SS.GenerateAll(SolveSpaceUI::Generate::ALL);
+    Group *mate = SK.GetGroup(SK.GetRequest(hm)->group);
+    CHECK_TRUE(mate->order == GroupNamed("gear")->order + 1);
+    CHECK_TRUE(mate->order < GroupNamed("hub-sketch")->order);
+    CHECK_TRUE(SS.GW.activeGroup == mate->h);
+    CHECK_TRUE(mate->solved.how == SolveResult::OKAY);
+    CHECK_TRUE(Mesh(GearEntity(), SK.GetEntity(hm.entity(0)), 0.15));
+}
