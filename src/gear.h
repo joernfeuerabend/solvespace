@@ -207,7 +207,8 @@ hConstraint GearFindCenterConstraint(hRequest a, hRequest b);
 // meshes with the gear driver, below it, in a new sketch after the active
 // group (see GEAR_RACK_AFTER_ACTIVE_GROUP). The pitch line of the rack is
 // also drawn as a construction line, which has a distance constraint to the
-// center of the gear. Returns the new request, or a null handle with the
+// center of the gear, and the ends and the back as construction lines (see
+// GearAddRackBackLines). Returns the new request, or a null handle with the
 // reason in error.
 hRequest GearAddRack(hRequest driver, int teeth, double base, std::string *error);
 
@@ -229,14 +230,25 @@ bool GearAddHub(hRequest gear, const GearHubParams &hp, std::string *error);
 // group (as GEAR_HUB_AFTER_ACTIVE_GROUP says for hubs), which must not come
 // before the sketch of the rack: an extrusion of that sketch, and for a
 // mount a sketch of the holes and its extrusion as a difference. Holes for
-// inserts are drawn on the back, which the sketch of the rack marks with a
-// construction line from the start of the pitch line. Returns false with an
+// inserts are drawn on the back, which the sketch of the rack marks with
+// construction lines (see GearAddRackBackLines). Returns false with an
 // error message if that is not possible.
 bool GearAddRackSolid(hRequest rack, const GearRackSolidParams &sp, std::string *error);
 
-// The construction line from the start of the pitch line of a rack to its
-// back, if any.
+// The construction lines in the sketch of a rack along its ends and its
+// back, if any: from the start and from the end of the pitch line to the
+// back, and along the back between the ends of these two.
 hRequest GearFindRackBackLine(hRequest rack);
+hRequest GearFindRackEndLine(hRequest rack);
+hRequest GearFindRackBackEdge(hRequest rack);
+bool GearRackHasBackLines(hRequest rack);
+
+// Adds those of these lines that are missing, with constraints that keep
+// them on the outline when the rack changes. With them, the ends and the
+// back of a solid made from the rack have points and edges that a new
+// workplane can be placed on. GearAddRack and GearAddRackSolid add them.
+// Returns false with an error message if that is not possible.
+bool GearAddRackBackLines(hRequest rack, std::string *error);
 
 }
 
