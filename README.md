@@ -1,6 +1,6 @@
 # SolveSpace – fork with fillets/chamfers and gear generator
 
-This is an unofficial fork of [SolveSpace](https://github.com/solvespace/solvespace),
+This is an unofficial fork (based on SolveSpace 3.3) of [SolveSpace](https://github.com/solvespace/solvespace),
 a parametric 2D/3D CAD tool. It adds two long-requested features: fillet and
 chamfer edges, and an involute gear generator. The fork is not affiliated with
 or supported by the SolveSpace maintainers. Please report bugs in these
