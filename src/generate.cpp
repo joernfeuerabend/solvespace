@@ -111,6 +111,11 @@ void SolveSpaceUI::GenerateAll(Generate type, bool andFindFree) {
 
     SK.RegenerateGroupOrder();
 
+    // Solving takes the first part of the progress bar, the solid model the
+    // most, and its triangulation for display the rest.
+    const double SOLVED = 0.3, MESHED = 0.85;
+    ProgressScope progress;
+
     switch(type) {
         case Generate::DIRTY: {
             first = INT_MAX;
@@ -192,6 +197,7 @@ void SolveSpaceUI::GenerateAll(Generate type, bool andFindFree) {
 
     // Not using range-for because we're using the index inside the loop.
     for(i = 0; i < SK.groupOrder.n; ) {
+        progress.Set(SOLVED * i / SK.groupOrder.n, SOLVED * (i + 1) / SK.groupOrder.n);
         const hGroup hg = SK.groupOrder[i];
         Group *g = SK.GetGroup(hg);
 
@@ -346,10 +352,21 @@ void SolveSpaceUI::GenerateAll(Generate type, bool andFindFree) {
             continue;
         }
         if(i >= first && i <= last) {
+            progress.Set(SOLVED + (MESHED - SOLVED) * i / SK.groupOrder.n,
+                         SOLVED + (MESHED - SOLVED) * (i + 1) / SK.groupOrder.n);
             Group *g = SK.GetGroup(hg);
             g->GenerateShellAndMesh();
             g->clean = true;
         }
+    }
+
+    // Triangulate the solid model that is shown now, while the progress bar
+    // is up, instead of when the window is painted next.
+    if(GW.window && !exportMode) {
+        Group *active = SK.group.FindByIdNoOops(GW.activeGroup);
+        progress.Set(MESHED, 1);
+        if(active != NULL) active->GenerateDisplayItems();
+        progress.Set(1);
     }
 
     // And update any reference dimensions with their new values

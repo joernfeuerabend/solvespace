@@ -507,8 +507,19 @@ bool SolveSpaceUI::LoadFromFile(const Platform::Path &filename, bool canCancel) 
     sv.g.scale = 1; // default is 1, not 0; so legacy files need this
     Style::FillDefaultStyle(&sv.s);
 
+    ProgressScope progress;
+    long fileSize = 0;
+    if(fseek(fh, 0, SEEK_END) == 0) {
+        fileSize = ftell(fh);
+    }
+    fseek(fh, 0, SEEK_SET);
+    int lineCount = 0;
+
     char line[1024];
     while(fgets(line, (int)sizeof(line), fh)) {
+        if(fileSize > 0 && ++lineCount % 1024 == 0) {
+            progress.Set((double)ftell(fh) / fileSize);
+        }
         char *s = strchr(line, '\n');
         if(s) *s = '\0';
         // We should never get files with \r characters in them, but mailers

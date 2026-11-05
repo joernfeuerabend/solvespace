@@ -286,6 +286,12 @@ public:
 
     virtual void Invalidate() = 0;
 
+    // Shows a thin bar along the top edge of the window content, filled to the
+    // given fraction from the left, and paints it right away without running
+    // the event loop, since this is called while the application is busy. A
+    // negative fraction hides the bar. Windows that cannot do this ignore it.
+    virtual void SetProgress(double fraction) {}
+
     // Docking a TOOL window into its parent window. Platforms that support it
     // override all three.
     virtual bool CanDock() { return false; }

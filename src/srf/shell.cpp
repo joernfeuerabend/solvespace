@@ -733,8 +733,10 @@ void SShell::MakeSectionEdgesInto(Vector n, double d, SEdgeList *sel, SBezierLis
 }
 
 void SShell::TriangulateInto(SMesh *sm) {
+    ProgressScope progress;
 #pragma omp parallel for
     for(int i=0; i<surface.n; i++) {
+        progress.Set((double)i / surface.n);
         SSurface *s = &surface[i];
         SMesh m;
         s->TriangulateInto(this, &m);

@@ -426,6 +426,27 @@ public:
 #undef ENTITY
 #undef CONSTRAINT
 
+// Reports how far a long computation has got, as a thin bar along the top of
+// the main window. Set tells which part of the range from 0 to 1 is done, and
+// where the step that follows ends; a scope opened during that step reports
+// within it, so that deep loops can show progress on behalf of their callers.
+// The bar appears only once the outermost scope has run for a while, never
+// moves back, and disappears when the outermost scope ends.
+class ProgressScope {
+public:
+    ProgressScope();
+    ~ProgressScope();
+    void Set(double fraction, double next = -1);
+
+    ProgressScope(const ProgressScope &) = delete;
+    ProgressScope &operator=(const ProgressScope &) = delete;
+
+private:
+    ProgressScope *parent;
+    double base, scale;
+    double stepFrom, stepTo;
+};
+
 class SolveSpaceUI {
 public:
     TextWindow                 *pTW;

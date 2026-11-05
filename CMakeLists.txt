@@ -412,6 +412,7 @@ if(ENABLE_GUI)
     elseif(APPLE)
         find_package(OpenGL REQUIRED)
         find_library(APPKIT_LIBRARY AppKit REQUIRED)
+        find_library(QUARTZCORE_LIBRARY QuartzCore REQUIRED)
     elseif(EMSCRIPTEN)
         # Everything is built in
     else()

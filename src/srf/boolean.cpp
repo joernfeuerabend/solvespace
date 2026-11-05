@@ -758,9 +758,11 @@ SSurface SSurface::MakeCopyTrimAgainst(SShell *parent,
 
 void SShell::CopySurfacesTrimAgainst(SShell *sha, SShell *shb, SShell *into, SSurface::CombineAs type) {
     std::vector <SSurface> ssn(surface.n);
+    ProgressScope progress;
 #pragma omp parallel for
     for (int i = 0; i < surface.n; i++)
     {
+        progress.Set((double)i / surface.n);
         SSurface *ss = &surface[i];
         ssn[i] = ss->MakeCopyTrimAgainst(this, sha, shb, into, type, i);
     }
@@ -773,8 +775,10 @@ void SShell::CopySurfacesTrimAgainst(SShell *sha, SShell *shb, SShell *into, SSu
 }
 
 void SShell::MakeIntersectionCurvesAgainst(SShell *agnst, SShell *into) {
+    ProgressScope progress;
 #pragma omp parallel for
     for(int i = 0; i< surface.n; i++) {
+        progress.Set((double)i / surface.n);
         SSurface *sa = &surface[i];
 
         for(SSurface &sb : agnst->surface){
@@ -858,9 +862,12 @@ void SShell::MakeFromAssemblyOf(SShell *a, SShell *b) {
 
 void SShell::MakeFromBoolean(SShell *a, SShell *b, SSurface::CombineAs type) {
     booleanFailed = false;
+    // Roughly how the time is shared between the steps.
+    ProgressScope progress;
 
     a->MakeClassifyingBsps(NULL);
     b->MakeClassifyingBsps(NULL);
+    progress.Set(0.05, 0.15);
 
     // Copy over all the original curves, splitting them so that a
     // piecewise linear segment never crosses a surface from the other
@@ -870,7 +877,9 @@ void SShell::MakeFromBoolean(SShell *a, SShell *b, SSurface::CombineAs type) {
 
     // Generate the intersection curves for each surface in A against all
     // the surfaces in B (which is all of the intersection curves).
+    progress.Set(0.15, 0.55);
     a->MakeIntersectionCurvesAgainst(b, this);
+    progress.Set(0.55);
 
     for(SCurve &sc : curve) {
         SSurface *srfA = sc.GetSurfaceA(a, b),
@@ -893,7 +902,9 @@ void SShell::MakeFromBoolean(SShell *a, SShell *b, SSurface::CombineAs type) {
         I = 0;
     }
     // Then trim and copy the surfaces
+    progress.Set(0.6, 0.8);
     a->CopySurfacesTrimAgainst(a, b, this, type);
+    progress.Set(0.8, 1);
     b->CopySurfacesTrimAgainst(a, b, this, type);
 
     // Now that we've copied the surfaces, we know their new hSurfaces, so

@@ -203,8 +203,12 @@ bool SolveSpaceUI::LoadAutosaveFor(const Platform::Path &filename) {
 }
 
 bool SolveSpaceUI::Load(const Platform::Path &filename) {
+    // Reading the file is quick next to generating the model from it.
+    ProgressScope progress;
+    progress.Set(0, 0.1);
     bool autosaveLoaded = LoadAutosaveFor(filename);
     bool fileLoaded = autosaveLoaded || LoadFromFile(filename, /*canCancel=*/true);
+    progress.Set(0.1, 1);
     if(fileLoaded) {
         saveFile = filename;
         AddToRecentList(filename);
