@@ -1341,7 +1341,8 @@ public:
 
         // Along the top of the content, below the menu bar.
         Gtk::Allocation area = outerPaned.get_allocation();
-        GdkRectangle bar = { area.get_x(), area.get_y(), area.get_width(), 2 };
+        // About two points high.
+        GdkRectangle bar = { area.get_x(), area.get_y(), area.get_width(), 3 };
         if(fraction < 0) {
             // GTK paints the content there again when the event loop runs.
             gdk_window_invalidate_rect(top, &bar, /*invalidate_children=*/TRUE);
@@ -1358,9 +1359,9 @@ public:
         auto channel = [](unsigned long mask, unsigned value) {
             return (unsigned long)((double)mask * value / 255.0) & mask;
         };
-        unsigned long pixel = channel(xVisual->red_mask,   0x3c) |
-                              channel(xVisual->green_mask, 0x9e) |
-                              channel(xVisual->blue_mask,  0xff);
+        unsigned long pixel = channel(xVisual->red_mask,   0xff) |
+                              channel(xVisual->green_mask, 0xb0) |
+                              channel(xVisual->blue_mask,  0x00);
         if(gdk_visual_get_depth(visual) == 32) {
             pixel |= 0xff000000ul & ~(xVisual->red_mask | xVisual->green_mask |
                                       xVisual->blue_mask);

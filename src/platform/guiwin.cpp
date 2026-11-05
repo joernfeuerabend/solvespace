@@ -611,7 +611,7 @@ public:
                 HDC hDc = BeginPaint(h, &ps);
                 RECT rc;
                 GetClientRect(h, &rc);
-                HBRUSH hBrush = CreateSolidBrush(RGB(0x3c, 0x9e, 0xff));
+                HBRUSH hBrush = CreateSolidBrush(RGB(0xff, 0xb0, 0x00));
                 FillRect(hDc, &rc, hBrush);
                 DeleteObject(hBrush);
                 EndPaint(h, &ps);
@@ -1853,7 +1853,8 @@ public:
         RECT rc;
         sscheck(GetClientRect(hFrame, &rc));
         int width  = (int)(rc.right * std::min(1.0, fraction) + 0.5);
-        int height = std::max(2, MulDiv(2, (int)ssGetDpiForWindow(hFrame), 96));
+        // Two points high.
+        int height = std::max(3, MulDiv(2, (int)ssGetDpiForWindow(hFrame), 72));
         SetWindowPos(hProgress, HWND_TOP, 0, 0, width, height,
                      SWP_NOACTIVATE|SWP_SHOWWINDOW);
         // Paint now; the message loop is not running while we are busy.
