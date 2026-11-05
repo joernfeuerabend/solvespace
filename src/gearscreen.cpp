@@ -97,6 +97,32 @@ bool TextWindow::EditControlDoneForGear(const std::string &s) {
     Expr *e = Expr::From(s, /*popUpError=*/true);
     if(e == NULL) return false;
 
+    if(edit.meaning == Edit::GEAR_RACK_SOLID_PARAM) {
+        GearRackSolidParams &sp = gearRackSolid;
+        if(edit.i == 'n') {
+            int n = (int)floor(e->Eval() + 0.5);
+            if(n < 1) {
+                Error(_("There must be at least one hole."));
+                return false;
+            }
+            sp.holes = n;
+        } else {
+            double val = SS.ExprToMm(e);
+            if(!(val > 0)) {
+                Error(_("The value must be greater than zero."));
+                return false;
+            }
+            switch(edit.i) {
+                case 'w': sp.width = val;        break;
+                case 'b': sp.base = val;         break;
+                case 'd': sp.holeDiameter = val; break;
+                case 'h': sp.holeDepth = val;    break;
+            }
+        }
+        SS.ScheduleShowTW();
+        return true;
+    }
+
     if(edit.meaning == Edit::GEAR_RACK_PARAM) {
         if(edit.i == 'b') {
             double val = SS.ExprToMm(e);
@@ -542,6 +568,8 @@ void TextWindow::DescribeGearRack(Entity *e) {
             Printf(false, "  clearance and backlash");
         }
     }
+    Printf(true, "  %Fl%Ls%f%D[make solid with mounting holes]%E",
+           &ScreenGearRackSolid, hv);
 }
 
 //-----------------------------------------------------------------------------
@@ -628,6 +656,121 @@ void TextWindow::ShowGearRack() {
         Printf(true, "  %Fx%s%E", _("no tooth shape possible for these values"));
     } else {
         Printf(true, "  %Fl%f%Ll[create]%E", &ScreenCreateGearRack);
+    }
+    Printf(true, "(or %Fl%Ll%fback to home screen%E)", &ScreenHome);
+}
+
+//-----------------------------------------------------------------------------
+// The screen that makes a rack a solid with mounting holes.
+//-----------------------------------------------------------------------------
+void TextWindow::ScreenGearRackSolid(int link, uint32_t v) {
+    hRequest hr = { v };
+    Request *r = SK.request.FindByIdNoOops(hr);
+    if(r == NULL) return;
+
+    SS.TW.shown.gear = hr;
+    SS.TW.gearRackSolid = GearRackSolidParams::Default(r->gear);
+    SS.GW.ClearSelection();
+    SS.TW.GoToScreen(Screen::GEAR_RACK_SOLID);
+    SS.ScheduleShowTW();
+}
+
+void TextWindow::ScreenChangeGearRackSolid(int link, uint32_t v) {
+    GearRackSolidParams &sp = SS.TW.gearRackSolid;
+    using Mount = GearRackSolidParams::Mount;
+    std::string val;
+    switch(link) {
+        case 'w': val = SS.MmToString(sp.width, true);        break;
+        case 'b': val = SS.MmToString(sp.base, true);         break;
+        case 'd': val = SS.MmToString(sp.holeDiameter, true); break;
+        case 'h': val = SS.MmToString(sp.holeDepth, true);    break;
+        case 'n': val = ssprintf("%d", sp.holes);             break;
+
+        case 'I':
+        case 'C':
+        case 'N':
+        {
+            Request *r = SK.request.FindByIdNoOops(SS.TW.shown.gear);
+            if(r == NULL) return;
+            int holes = sp.holes;
+            sp = GearRackSolidParams::Default(r->gear,
+                (link == 'I') ? Mount::INSERT : (link == 'C') ? Mount::CROSS : Mount::NONE);
+            sp.holes = holes;
+            SS.ScheduleShowTW();
+            return;
+        }
+
+        default:
+            return;
+    }
+    SS.TW.ShowEditControl(20, val);
+    SS.TW.edit.meaning = Edit::GEAR_RACK_SOLID_PARAM;
+    SS.TW.edit.request = SS.TW.shown.gear;
+    SS.TW.edit.i = link;
+}
+
+void TextWindow::ScreenCreateGearRackSolid(int link, uint32_t v) {
+    SS.UndoRemember();
+    std::string error;
+    if(!GearAddRackSolid(SS.TW.shown.gear, SS.TW.gearRackSolid, &error)) {
+        Error("%s", error.c_str());
+        return;
+    }
+    SS.GW.ClearSelection();
+    SS.TW.GoToScreen(Screen::LIST_OF_GROUPS);
+    SS.ScheduleShowTW();
+    SS.GW.Invalidate();
+}
+
+void TextWindow::ShowGearRackSolid() {
+    Request *r = SK.request.FindByIdNoOops(shown.gear);
+    if(r == NULL || r->type != Request::Type::GEAR_RACK) {
+        GoToScreen(Screen::LIST_OF_GROUPS);
+        Show();
+        return;
+    }
+    const GearRackSolidParams &sp = gearRackSolid;
+    using Mount = GearRackSolidParams::Mount;
+
+    Printf(true, "%FtRACK AS A SOLID%E");
+    Printf(false, "  for rack %Fi%s%E", r->DescriptionString().c_str());
+
+    struct Row { const char *label; char link; std::string value; bool show; };
+    const Row rows[] = {
+        { "width          ", 'w', SS.MmToString(sp.width),        true },
+        { "back thickness ", 'b', SS.MmToString(sp.base),         true },
+        { "holes          ", 'n', ssprintf("%d", sp.holes),       sp.mount != Mount::NONE },
+        { "hole diameter  ", 'd', SS.MmToString(sp.holeDiameter), sp.mount != Mount::NONE },
+        { "hole depth     ", 'h', SS.MmToString(sp.holeDepth),    sp.mount == Mount::INSERT },
+    };
+    bool first = true;
+    for(const Row &row : rows) {
+        if(!row.show) continue;
+        std::string fmt = std::string("  %s = %Fi%s%E %Fl%L") + row.link + "%f[change]%E";
+        Printf(first, fmt.c_str(), row.label, row.value.c_str(), &ScreenChangeGearRackSolid);
+        first = false;
+    }
+
+    Printf(true, "  %Ftmounting%E");
+    std::string insert = ssprintf("M3 heat-set inserts from the back, %.1f mm long",
+                                  GEAR_INSERT_LENGTH);
+    Printf(false, "  %f%LI%Fd%s  %s%E",
+           &ScreenChangeGearRackSolid, sp.mount == Mount::INSERT ? RADIO_TRUE : RADIO_FALSE,
+           insert.c_str());
+    Printf(false, "  %f%LC%Fd%s  M3 through holes across the back%E",
+           &ScreenChangeGearRackSolid, sp.mount == Mount::CROSS ? RADIO_TRUE : RADIO_FALSE);
+    Printf(false, "  %f%LN%Fd%s  none%E",
+           &ScreenChangeGearRackSolid, sp.mount == Mount::NONE ? RADIO_TRUE : RADIO_FALSE);
+
+    Printf(true, "  %FdA new mounting suggests width, back and holes%E");
+    Printf(false, "  %Fdagain. The holes are spaced evenly along the rack.%E");
+
+    std::string problem = sp.Problem(r->gear);
+    if(!problem.empty()) {
+        Printf(true, "  %Fx%s%E", problem.c_str());
+    } else {
+        if(!sp.Warning().empty()) Printf(true, "  %Fx%s%E", sp.Warning().c_str());
+        Printf(true, "  %Fl%f%Ll[create]%E", &ScreenCreateGearRackSolid);
     }
     Printf(true, "(or %Fl%Ll%fback to home screen%E)", &ScreenHome);
 }

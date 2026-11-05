@@ -985,6 +985,7 @@ void TextWindow::EditControlDone(std::string s) {
         case Edit::GEAR_MATE_RATIO:
         case Edit::GEAR_HUB_PARAM:
         case Edit::GEAR_RACK_PARAM:
+        case Edit::GEAR_RACK_SOLID_PARAM:
             EditControlDoneForGear(s);
             break;
 

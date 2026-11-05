@@ -861,3 +861,136 @@ TEST_CASE(rack_roundtrip) {
     CHECK_TRUE(found);
     CHECK_SAVE("rack.slvs");
 }
+
+// Area of the outline of a rack.
+static double RackArea(hRequest hr) {
+    std::vector<Vector> pts;
+    Polyline(SK.GetEntity(hr.entity(0)), &pts);
+    double area = 0;
+    for(size_t i = 0, j = pts.size() - 1; i < pts.size(); j = i++) {
+        area += pts[j].x * pts[i].y - pts[i].x * pts[j].y;
+    }
+    return fabs(area) / 2;
+}
+
+TEST_CASE(rack_solid_defaults) {
+    using Mount = GearRackSolidParams::Mount;
+    GearParams gp = RackParams(1.5, 12, 3);
+    GearRackSolidParams sp = GearRackSolidParams::Default(gp);
+    CHECK_TRUE(sp.mount == Mount::INSERT);
+    CHECK_EQ_EPS(sp.width, 7.0);
+    CHECK_EQ_EPS(sp.base, 7.5);
+    CHECK_EQ_EPS(sp.holeDiameter, 4.0);
+    CHECK_EQ_EPS(sp.holeDepth, GEAR_INSERT_LENGTH + 0.5);
+    CHECK_TRUE(sp.holes == 2);
+    CHECK_TRUE(sp.Problem(gp).empty());
+
+    sp = GearRackSolidParams::Default(gp, Mount::CROSS);
+    CHECK_EQ_EPS(sp.width, 6.0);
+    CHECK_EQ_EPS(sp.holeDiameter, 3.4);
+    CHECK_EQ_EPS(sp.base, 6.0);
+    CHECK_TRUE(sp.Problem(gp).empty());
+
+    sp = GearRackSolidParams::Default(gp, Mount::NONE);
+    CHECK_EQ_EPS(sp.base, 3.0);
+    CHECK_TRUE(sp.Problem(gp).empty());
+
+    // Too thin a back, or too many holes.
+    sp = GearRackSolidParams::Default(gp);
+    sp.base = 6;
+    CHECK_FALSE(sp.Problem(gp).empty());
+    sp.base = 7.5;
+    sp.holes = 12;
+    CHECK_FALSE(sp.Problem(gp).empty());
+    CHECK_TRUE(GearRackSolidParams::Default(RackParams(1.5, 4, 3)).holes == 1);
+}
+
+static hRequest SolidRack(GearRackSolidParams::Mount mount, GearRackSolidParams *sp,
+                          std::string *error) {
+    hRequest hr = GearAddRack(GEAR_REQUEST, 12, 3);
+    SS.GenerateAll(SolveSpaceUI::Generate::ALL);
+    *sp = GearRackSolidParams::Default(SK.GetRequest(hr)->gear, mount);
+    if(!GearAddRackSolid(hr, *sp, error)) return {};
+    SS.GenerateAll(SolveSpaceUI::Generate::ALL);
+    return hr;
+}
+
+TEST_CASE(rack_solid_inserts) {
+    CHECK_LOAD("normal.slvs");
+    GearRackSolidParams sp;
+    std::string error;
+    hRequest hr = SolidRack(GearRackSolidParams::Mount::INSERT, &sp, &error);
+    CHECK_TRUE(hr.v != 0);
+    CHECK_EQ_EPS(SK.GetRequest(hr)->gear.rackBase, 7.5);
+    CHECK_TRUE(GearFindRackBackLine(hr).v != 0);
+    for(const char *name : { "rack", "rack-insert-sketch" }) {
+        Group *g = GroupNamed(name);
+        CHECK_TRUE(g != NULL);
+        CHECK_TRUE(g->solved.how == SolveResult::OKAY);
+    }
+    CHECK_TRUE(GroupNamed("rack-insert-sketch")->solved.dof == 0);
+    Group *last = GroupNamed("rack-insert-holes");
+    CHECK_TRUE(last != NULL);
+    CHECK_TRUE(SS.GW.activeGroup == last->h);
+    last->GenerateDisplayItems();
+    SMesh *m = &last->displayMesh;
+    CHECK_TRUE(IsWatertight(m));
+    double r = sp.holeDiameter / 2;
+    double expected = RackArea(hr) * sp.width - sp.holes * PI * r * r * sp.holeDepth;
+    CHECK_TRUE(fabs(m->CalculateVolume() / expected - 1) < 3e-3);
+
+    // The holes go in from the back, which lies 1.875 + 7.5 mm below the
+    // pitch line, 15 mm below the gear center, and end at their depth
+    // around the middle of the width.
+    double floorY = -15 - 1.875 - 7.5 + sp.holeDepth;
+    int onFloor = 0;
+    for(const STriangle &t : m->l) {
+        for(const Vector &p : { t.a, t.b, t.c }) {
+            if(fabs(p.y - floorY) < 1e-3 && fabs(p.z - sp.width / 2) <= r + 1e-3) onFloor++;
+        }
+    }
+    CHECK_TRUE(onFloor > 0);
+
+    // A new back thickness moves the line to the back along.
+    SK.GetRequest(hr)->gear.rackBase = 9;
+    GearSyncLinked(hr);
+    SS.GenerateAll(SolveSpaceUI::Generate::ALL);
+    Vector b = SK.GetEntity(GearFindRackBackLine(hr).entity(2))->PointGetNum();
+    CHECK_EQ_EPS(b.y, -15 - 1.875 - 9);
+}
+
+TEST_CASE(rack_solid_cross_holes) {
+    CHECK_LOAD("normal.slvs");
+    GearRackSolidParams sp;
+    std::string error;
+    hRequest hr = SolidRack(GearRackSolidParams::Mount::CROSS, &sp, &error);
+    CHECK_TRUE(hr.v != 0);
+    CHECK_EQ_EPS(SK.GetRequest(hr)->gear.rackBase, 6.0);
+    CHECK_TRUE(GearFindRackBackLine(hr).v == 0);
+    CHECK_TRUE(GroupNamed("rack-holes-sketch")->solved.dof == 0);
+    Group *last = GroupNamed("rack-holes");
+    last->GenerateDisplayItems();
+    SMesh *m = &last->displayMesh;
+    CHECK_TRUE(IsWatertight(m));
+    double r = sp.holeDiameter / 2;
+    double expected = (RackArea(hr) - sp.holes * PI * r * r) * sp.width;
+    CHECK_TRUE(fabs(m->CalculateVolume() / expected - 1) < 3e-3);
+}
+
+TEST_CASE(rack_solid_plain) {
+    CHECK_LOAD("normal.slvs");
+    GearRackSolidParams sp;
+    std::string error;
+    hRequest hr = SolidRack(GearRackSolidParams::Mount::NONE, &sp, &error);
+    CHECK_TRUE(hr.v != 0);
+    Group *body = GroupNamed("rack-body");
+    CHECK_TRUE(SS.GW.activeGroup == body->h);
+    CHECK_TRUE(GroupNamed("rack-holes-sketch") == NULL);
+    body->GenerateDisplayItems();
+    CHECK_TRUE(IsWatertight(&body->displayMesh));
+    CHECK_TRUE(fabs(body->displayMesh.CalculateVolume() / (RackArea(hr) * sp.width) - 1) < 2e-3);
+
+    // A second solid of the same rack is refused.
+    CHECK_FALSE(GearAddRackSolid(hr, sp, &error));
+    CHECK_FALSE(error.empty());
+}

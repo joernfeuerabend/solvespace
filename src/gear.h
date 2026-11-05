@@ -145,6 +145,35 @@ public:
 
 static const double GEAR_INSERT_LENGTH = 5.7;
 
+// A rack made a solid, with holes to fasten it.
+class GearRackSolidParams {
+public:
+    enum class Mount : uint32_t {
+        NONE   = 0,
+        // Blind holes from the back for M3 heat-set inserts.
+        INSERT = 1,
+        // Through holes for M3 screws across the back, along the width.
+        CROSS  = 2
+    };
+
+    double width;         // face width, the depth of the extrusion
+    double base;          // back thickness, set on the rack
+    Mount  mount;
+    int    holes;         // number of holes, evenly spaced along the rack
+    double holeDiameter;
+    double holeDepth;     // for inserts
+
+    // Suggested values for a rack and mount: a width of four modules, but
+    // not under 5 mm, the back of the rack, as many holes as suit the
+    // length, and a hole size, depth, back and width that suit the mount.
+    static GearRackSolidParams Default(const GearParams &rack, Mount mount = Mount::INSERT);
+
+    // An error that keeps the solid from being made, or an empty string.
+    std::string Problem(const GearParams &rack) const;
+    // A hint about a solid that can be made but may not work well.
+    std::string Warning() const;
+};
+
 // Where GearAddHub puts its groups: true after the active group, false
 // right after the sketch of the gear.
 static const bool GEAR_HUB_AFTER_ACTIVE_GROUP = true;
@@ -194,6 +223,19 @@ hConstraint GearFindRackConstraint(hRequest gear, hRequest rack);
 // difference. These are ordinary groups that can be edited later. Returns
 // false with an error message if that is not possible.
 bool GearAddHub(hRequest gear, const GearHubParams &hp, std::string *error);
+
+// Makes the rack a solid. Sets its back thickness, and adds after the active
+// group (as GEAR_HUB_AFTER_ACTIVE_GROUP says for hubs), which must not come
+// before the sketch of the rack: an extrusion of that sketch, and for a
+// mount a sketch of the holes and its extrusion as a difference. Holes for
+// inserts are drawn on the back, which the sketch of the rack marks with a
+// construction line from the start of the pitch line. Returns false with an
+// error message if that is not possible.
+bool GearAddRackSolid(hRequest rack, const GearRackSolidParams &sp, std::string *error);
+
+// The construction line from the start of the pitch line of a rack to its
+// back, if any.
+hRequest GearFindRackBackLine(hRequest rack);
 
 }
 
