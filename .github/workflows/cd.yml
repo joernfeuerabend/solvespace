@@ -221,6 +221,8 @@ jobs:
       - build_release_flatpak
     if: "!cancelled() && github.event_name == 'release'"
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
     - name: Download All Workflow Artifacts
       uses: actions/download-artifact@v8
