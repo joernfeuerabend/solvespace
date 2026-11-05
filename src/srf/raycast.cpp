@@ -739,6 +739,8 @@ bool SShell::ClassifyEdge(Class *indir, Class *outdir,
     // Edge is not on face or on edge; so it's either inside or outside
     // the shell, and we'll determine which by raycasting.
     int cnt = 0;
+    bool haveNear = false;
+    Class nearIndir = Class::SURF_OUTSIDE, nearOutdir = Class::SURF_OUTSIDE;
     for(;;) {
         // Cast a ray in a random direction (two-sided so that we test if
         // the point lies on a surface, but use only one side for in/out
@@ -753,7 +755,7 @@ bool SShell::ClassifyEdge(Class *indir, Class *outdir,
         *indir  = Class::SURF_OUTSIDE;
         *outdir = Class::SURF_OUTSIDE;
         double dmin = VERY_POSITIVE;
-        bool onEdge = false;
+        bool onEdge = false, nearEdge = false;
         edge_inters = 0;
 
         SInter *si;
@@ -784,15 +786,34 @@ bool SShell::ClassifyEdge(Class *indir, Class *outdir,
                     *outdir = Class::SURF_OUTSIDE;
                 }
                 onEdge = si->onEdge;
+                // The trim polygon only approximates curved edges, to
+                // within the chord tolerance. A hit that close to it may
+                // lie on the wrong side of the true edge, as where the ray
+                // passes a circular edge on its way out of a hole.
+                nearEdge = !onEdge && si->srf->bsp &&
+                    si->srf->bsp->MinimumDistanceToEdge(si->pinter, si->srf) <
+                        SS.ChordTolMm();
             }
         }
         l.Clear();
 
         // If the point being tested lies exactly on an edge of the shell,
         // then our ray always lies on edge, and that's okay. Otherwise
-        // try again in a different random direction.
-        if(!onEdge) break;
+        // try again in a different random direction. A ray that only
+        // passes close to an edge is tried again too, but if no ray does
+        // better, the first such result is used.
+        if(!onEdge && !nearEdge) break;
+        if(nearEdge && !haveNear) {
+            haveNear   = true;
+            nearIndir  = *indir;
+            nearOutdir = *outdir;
+        }
         cnt++;
+        if(cnt > 5 && haveNear) {
+            *indir  = nearIndir;
+            *outdir = nearOutdir;
+            break;
+        }
         if(cnt > 5) {
             dbp("can't find a ray that doesn't hit on edge!");
             dbp("on edge = %d, edge_inters = %d", onEdge, edge_inters);

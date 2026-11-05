@@ -210,10 +210,13 @@ void Group::GenerateForBoolean(T *prevs, T *thiss, T *outs, Group::CombineAs how
 }
 
 //-----------------------------------------------------------------------------
-// Fillets and chamfers of straight edges between two plane faces. Each edge
-// gets a prismatic tool that runs along it, with a cross section bounded by
-// the two faces and by the rounding arc or bevel line. The tool is subtracted
-// from the solid at a convex edge and added to it at a concave edge.
+// Fillets and chamfers of straight edges between two plane faces, and of
+// circular edges between a cylinder and a plane normal to its axis. Each
+// edge gets a tool with a cross section bounded by the two faces and by the
+// rounding arc or bevel line. At a straight edge that section is extruded
+// along the edge, at a circular edge it is revolved about the axis of the
+// cylinder. The tool is subtracted from the solid at a convex edge and added
+// to it at a concave edge.
 //-----------------------------------------------------------------------------
 namespace {
 
@@ -233,6 +236,11 @@ struct EdgeBlend {
                         // along each face
     double  ext;        // how far the tool reaches beyond the faces
     bool    convex;
+    // A circular edge has a = b, at a point on the circle. The first face is
+    // the plane, the second one the cylinder, and the section through a that
+    // contains the axis is revolved about it.
+    bool    circular;
+    Vector  center, axis;
 };
 
 // Points closer than this to a plane lie on it.
@@ -269,14 +277,200 @@ bool ShellHasPlane(SShell *sh, Vector n, Vector p) {
     return false;
 }
 
+// Is the point p inside the closed mesh? The parity of the crossings of a
+// ray from p decides it, by a majority of three rays, in case one of them
+// passes through an edge of the mesh.
+bool PointInMesh(SMesh *m, Vector p) {
+    static const Vector dirs[3] = {
+        Vector::From(0.4712, 0.5813, 0.6637),
+        Vector::From(-0.7071, 0.3162, 0.6325),
+        Vector::From(0.2236, -0.8944, 0.3873),
+    };
+    int inside = 0;
+    for(Vector d : dirs) {
+        d = d.WithMagnitude(1);
+        int crossings = 0;
+        for(const STriangle &t : m->l) {
+            Vector e1 = t.b.Minus(t.a), e2 = t.c.Minus(t.a),
+                   pv = d.Cross(e2);
+            double det = e1.Dot(pv);
+            if(fabs(det) < 1e-12) continue;
+            Vector tv = p.Minus(t.a);
+            double u = tv.Dot(pv) / det;
+            if(u < 0 || u > 1) continue;
+            Vector qv = tv.Cross(e1);
+            double v = d.Dot(qv) / det;
+            if(v < 0 || u + v > 1) continue;
+            if(e2.Dot(qv) / det > 0) crossings++;
+        }
+        if(crossings % 2 == 1) inside++;
+    }
+    return inside >= 2;
+}
+
+// Is there a cylinder surface in the shell with the given axis and radius,
+// that reaches the plane normal to the axis through center? If so, return
+// the point where its section starts, on one of the lines along which it
+// meets the next patch of the same cylinder.
+bool ShellHasCylinder(SShell *sh, Vector center, Vector axis, double r,
+                      Vector *seam) {
+    for(SSurface &ss : sh->surface) {
+        Vector along, c, start, finish;
+        double rs;
+        if(!ss.IsCylinder(&along, &c, &rs, &start, &finish)) continue;
+        if(along.Magnitude() < LENGTH_EPS) continue;
+        if((along.WithMagnitude(1)).Cross(axis).Magnitude() > 1e-6) continue;
+        if(c.DistanceToLine(center, axis) > EDGE_PLANE_TOL) continue;
+        if(fabs(rs - r) > EDGE_PLANE_TOL) continue;
+        double h0 = axis.Dot(start.Minus(center)),
+               h1 = h0 + axis.Dot(along);
+        if(min(h0, h1) > EDGE_PLANE_TOL || max(h0, h1) < -EDGE_PLANE_TOL) {
+            continue;
+        }
+        *seam = start;
+        return true;
+    }
+    return false;
+}
+
+// Find the plane face and the cylinder of the solid at a circular edge, and
+// the size of the rounding or bevel on them.
+bool AnalyzeCircularEdge(SMesh *body, SShell *bodyShell, Entity *e,
+                         double size, EdgeBlend *eb, std::string *error)
+{
+    hEntity he = e->h;
+    Vector center = SK.GetEntity(e->point[0])->PointGetNum(),
+           axis = e->Normal()->NormalN().WithMagnitude(1);
+    double r = e->CircleGetRadiusNum();
+    if(r < LENGTH_EPS) {
+        *error = ssprintf(_("circle %08x has zero radius"), he.v);
+        return false;
+    }
+    if(size < LENGTH_EPS) {
+        *error = _("the size must be greater than zero");
+        return false;
+    }
+
+    // The edge seen in the section that contains the axis, at the point a
+    // of the circle, where rho points away from the axis. The tool is made
+    // of four patches, like the cylinder, and its seams are those of the
+    // cylinder, so that each patch of the rounding meets one patch of the
+    // cylinder along the whole of its edge.
+    Vector seam;
+    if(bodyShell->IsEmpty() ||
+       !ShellHasCylinder(bodyShell, center, axis, r, &seam) ||
+       seam.DistanceToLine(center, axis) < LENGTH_EPS)
+    {
+        seam = center.Plus(axis.Normal(0));
+    }
+    Vector rho = (seam.Minus(center)).Minus(
+                    axis.ScaledBy(axis.Dot(seam.Minus(center))));
+    rho = rho.WithMagnitude(1);
+    Vector a = center.Plus(rho.ScaledBy(r));
+    // The faces meet at a right angle, so the rounding and the bevel both
+    // start at the distance size from the edge.
+    double k = size;
+    double eps = 0.25*min(k, r);
+
+    // Which of the four quadrants around the edge are inside the solid? At a
+    // convex edge it is one of them, at a concave one all but one.
+    int nInside = 0, sa = 0, sr = 0;
+    bool inside[2][2];
+    for(int i = 0; i < 2; i++) {
+        for(int j = 0; j < 2; j++) {
+            Vector p = a.Plus(axis.ScaledBy(i == 0 ? eps : -eps))
+                        .Plus(rho.ScaledBy(j == 0 ? eps : -eps));
+            inside[i][j] = PointInMesh(body, p);
+            if(inside[i][j]) nInside++;
+        }
+    }
+    bool convex = (nInside == 1);
+    if(nInside == 1 || nInside == 3) {
+        // The quadrant that differs from the other three.
+        for(int i = 0; i < 2; i++) {
+            for(int j = 0; j < 2; j++) {
+                if(inside[i][j] == convex) {
+                    sa = (i == 0) ? 1 : -1;
+                    sr = (j == 0) ? 1 : -1;
+                }
+            }
+        }
+    }
+    // That quadrant lies between the faces. The plane runs from the edge
+    // away from the axis or towards it, the cylinder along the axis; the
+    // outward normal of each points into that quadrant at a concave edge,
+    // and away from it at a convex one.
+    double out = convex ? -1 : 1;
+    Vector n1 = axis.ScaledBy(sa*out), u1 = rho.ScaledBy(sr),
+           n2 = rho.ScaledBy(sr*out),  u2 = axis.ScaledBy(sa);
+    if(sa == 0 ||
+       (!bodyShell->IsEmpty() &&
+        (!ShellHasPlane(bodyShell, n1, a) ||
+         !ShellHasCylinder(bodyShell, center, axis, r, &seam))))
+    {
+        *error = ssprintf(_("circle %08x is not an edge between a cylinder "
+                            "and a plane face normal to its axis"), he.v);
+        return false;
+    }
+
+    eb->h = he;
+    eb->a = a;
+    eb->b = a;
+    eb->d = axis.Cross(rho);
+    eb->n1 = n1; eb->u1 = u1;
+    eb->n2 = n2; eb->u2 = u2;
+    eb->theta = PI/2;
+    eb->convex = convex;
+    eb->k = k;
+    // The faces of the tool beyond the solid are cut from planes and
+    // cylinders by circles, which the trim polygons approximate. Unless the
+    // tool reaches clearly farther than the chord tolerance, those faces are
+    // too narrow for that.
+    double ext = max(0.1*k, 3*SS.ChordTolMm());
+    eb->ext = ext * (convex ? 1 : -1);
+    eb->circular = true;
+    eb->center = center;
+    eb->axis = axis;
+
+    // The section must stay clear of the axis.
+    if((sr < 0 && k + 2*EDGE_PLANE_TOL >= r) ||
+       (n2.Dot(rho) < 0 && 2*ext >= r)) {
+        *error = ssprintf(_("the size is too large for the faces at "
+                            "edge %08x"), he.v);
+        return false;
+    }
+    // Both faces must reach as far as the tangent points, with material
+    // behind them and none in front.
+    double d = 0.25*eps;
+    Vector t[2] = { a.Plus(u1.ScaledBy(k)), a.Plus(u2.ScaledBy(k)) },
+           n[2] = { n1, n2 };
+    for(int i = 0; i < 2; i++) {
+        if(!PointInMesh(body, t[i].Minus(n[i].ScaledBy(d))) ||
+            PointInMesh(body, t[i].Plus(n[i].ScaledBy(d))))
+        {
+            *error = ssprintf(_("the size is too large for the faces at "
+                                "edge %08x"), he.v);
+            return false;
+        }
+    }
+    return true;
+}
+
 // Find the two plane faces of the solid at the edge, and the size of the
 // rounding or bevel on them.
 bool AnalyzeEdge(SMesh *body, SShell *bodyShell, hEntity he, bool chamfer,
                  double size, EdgeBlend *eb, std::string *error)
 {
     Entity *e = SK.entity.FindByIdNoOops(he);
-    if(e == NULL || e->type != Entity::Type::LINE_SEGMENT) {
+    if(e != NULL && e->type == Entity::Type::CIRCLE) {
+        return AnalyzeCircularEdge(body, bodyShell, e, size, eb, error);
+    }
+    if(e == NULL) {
         *error = ssprintf(_("edge %08x does not exist"), he.v);
+        return false;
+    } else if(e->type != Entity::Type::LINE_SEGMENT) {
+        *error = ssprintf(_("edge %08x is neither a line segment nor a "
+                            "circle"), he.v);
         return false;
     }
     Vector a = SK.GetEntity(e->point[0])->PointGetNum(),
@@ -389,8 +583,9 @@ bool LoopFrom(SBezierList *sbl, SBezierLoopSetSet *sblss) {
     return (allClosed && allCoplanar && sblss->l.n == 1);
 }
 
-// Make the tool for the edge. It runs along the edge from the plane through
-// pa with normal na to the plane through pb with normal nb.
+// Make the tool for the edge. At a straight edge it runs along the edge from
+// the plane through pa with normal na to the plane through pb with normal nb.
+// At a circular edge it goes all the way around.
 bool MakeEdgeTool(const EdgeBlend &eb, bool chamfer, Vector pa, Vector na,
                   Vector pb, Vector nb, RgbaColor color, SShell *tool)
 {
@@ -419,9 +614,14 @@ bool MakeEdgeTool(const EdgeBlend &eb, bool chamfer, Vector pa, Vector na,
     }
 
     SBezierLoopSetSet sblss = {};
-    bool ok = LoopFrom(&sbl, &sblss) &&
-              tool->MakeFromExtrusionBetweenPlanes(&(sblss.l[0]), eb.d,
-                                                   pa, na, pb, nb, color);
+    bool ok = LoopFrom(&sbl, &sblss);
+    if(ok && eb.circular) {
+        tool->MakeFromRevolutionOf(&(sblss.l[0]), eb.center, eb.axis, color,
+                                   NULL);
+    } else if(ok) {
+        ok = tool->MakeFromExtrusionBetweenPlanes(&(sblss.l[0]), eb.d,
+                                                  pa, na, pb, nb, color);
+    }
     sblss.Clear();
     sbl.Clear();
     return ok;
@@ -435,7 +635,9 @@ double ToolReach(const EdgeBlend &eb) {
 // Is v an end point of the edge? If so, return the direction from v along
 // the edge.
 bool EdgeEndAt(const EdgeBlend &eb, Vector v, Vector *dir) {
-    if(v.Equals(eb.a, EDGE_PLANE_TOL)) {
+    if(eb.circular) {
+        return false;
+    } else if(v.Equals(eb.a, EDGE_PLANE_TOL)) {
         *dir = eb.d;
         return true;
     } else if(v.Equals(eb.b, EDGE_PLANE_TOL)) {
@@ -526,7 +728,7 @@ void Group::GenerateEdgeBlends() {
         // it there, given by their normals pointing into the tool.
         Vector endPoint[2] = { eb.a, eb.b }, endNormal[2] = { eb.d, eb.d };
         std::vector<Vector> moreMiters[2];
-        for(int end = 0; end < 2; end++) {
+        for(int end = 0; end < 2 && !eb.circular; end++) {
             Vector v = (end == 0) ? eb.a : eb.b,
                    di = (end == 0) ? eb.d : eb.d.ScaledBy(-1);
             bool first = true;
@@ -554,7 +756,7 @@ void Group::GenerateEdgeBlends() {
         // A concave edge whose end meets convex edges would stick out of
         // their blends there. Unless it is mitered, end it a little before
         // the blend of the convex edges begins, on the faces along it.
-        for(int end = 0; end < 2 && !eb.convex; end++) {
+        for(int end = 0; end < 2 && !eb.convex && !eb.circular; end++) {
             if(!endNormal[end].Equals(eb.d)) continue;
             Vector v = (end == 0) ? eb.a : eb.b,
                    di = (end == 0) ? eb.d : eb.d.ScaledBy(-1);

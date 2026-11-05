@@ -1110,9 +1110,14 @@ double SBspUv::MinimumDistanceToEdge(Point2d p, SSurface *srf) const {
     double dn = (neg) ? neg->MinimumDistanceToEdge(p, srf) : VERY_POSITIVE;
     double dp = (pos) ? pos->MinimumDistanceToEdge(p, srf) : VERY_POSITIVE;
 
-    Point2d as = a, bs = b;
-    ScalePoints(&p, &as, &bs, srf);
-    double d = p.DistanceToLine(as, bs.Minus(as), /*asSegment=*/true);
+    // The edges collinear with this one are in the list of more edges, and
+    // the nearest of them counts.
+    double d = VERY_POSITIVE;
+    for(const SBspUv *f = this; f; f = f->more) {
+        Point2d ps = p, as = f->a, bs = f->b;
+        ScalePoints(&ps, &as, &bs, srf);
+        d = min(d, ps.DistanceToLine(as, bs.Minus(as), /*asSegment=*/true));
+    }
 
     return min(d, min(dn, dp));
 }
