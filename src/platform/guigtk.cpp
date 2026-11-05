@@ -33,6 +33,11 @@
 #   include <gtkmm/filechoosernative.h>
 #endif
 
+#include <gdk/gdk.h>
+#if defined(GDK_WINDOWING_X11)
+#   include <gdk/gdkx.h>
+#endif
+
 #if defined(HAVE_SPACEWARE)
 #   include <spnav.h>
 #   include <gdk/gdk.h>
@@ -1028,11 +1033,15 @@ public:
     DockSide            dockSide  = DockSide::NONE;
     int                 dockWidth = 420;
 
+    // Only a TOPLEVEL window shows a progress bar.
+    bool                isToplevel = false;
+
     WindowImplGtk(Window::Kind kind)
         : gtkWindow(this),
           outerPaned(Gtk::ORIENTATION_HORIZONTAL),
           innerPaned(Gtk::ORIENTATION_HORIZONTAL),
           content(this) {
+        isToplevel = (kind == Kind::TOPLEVEL);
         switch(kind) {
             case Kind::TOPLEVEL:
                 // The content takes up any change in window size; docked panels
@@ -1322,6 +1331,50 @@ public:
 
     void Invalidate() override {
         content.get_gl_widget().queue_render();
+    }
+
+    void SetProgress(double fraction) override {
+#if defined(GDK_WINDOWING_X11)
+        if(!isToplevel) return;
+        GdkWindow *top = gtk_widget_get_window(GTK_WIDGET(gtkWindow.gobj()));
+        if(top == NULL || !GDK_IS_X11_WINDOW(top)) return;
+
+        // Along the top of the content, below the menu bar.
+        Gtk::Allocation area = outerPaned.get_allocation();
+        GdkRectangle bar = { area.get_x(), area.get_y(), area.get_width(), 2 };
+        if(fraction < 0) {
+            // GTK paints the content there again when the event loop runs.
+            gdk_window_invalidate_rect(top, &bar, /*invalidate_children=*/TRUE);
+            return;
+        }
+
+        // GTK paints only from the event loop, which is not running while we
+        // are busy, so draw into the window directly; this stays until GTK
+        // paints that part of the window again.
+        Display *xDisplay = GDK_WINDOW_XDISPLAY(top);
+        ::Window xWindow  = GDK_WINDOW_XID(top);
+        GdkVisual *visual = gdk_window_get_visual(top);
+        Visual *xVisual   = gdk_x11_visual_get_xvisual(visual);
+        auto channel = [](unsigned long mask, unsigned value) {
+            return (unsigned long)((double)mask * value / 255.0) & mask;
+        };
+        unsigned long pixel = channel(xVisual->red_mask,   0x3c) |
+                              channel(xVisual->green_mask, 0x9e) |
+                              channel(xVisual->blue_mask,  0xff);
+        if(gdk_visual_get_depth(visual) == 32) {
+            pixel |= 0xff000000ul & ~(xVisual->red_mask | xVisual->green_mask |
+                                      xVisual->blue_mask);
+        }
+
+        int scale = gdk_window_get_scale_factor(top);
+        int width = (int)(bar.width * std::min(1.0, fraction) + 0.5);
+        GC gc = XCreateGC(xDisplay, xWindow, 0, NULL);
+        XSetForeground(xDisplay, gc, pixel);
+        XFillRectangle(xDisplay, xWindow, gc, bar.x * scale, bar.y * scale,
+                       std::max(1, width) * scale, bar.height * scale);
+        XFreeGC(xDisplay, gc);
+        XFlush(xDisplay);
+#endif
     }
 
 protected:

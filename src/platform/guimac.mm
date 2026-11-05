@@ -5,6 +5,7 @@
 //-----------------------------------------------------------------------------
 #include "solvespace.h"
 #import  <AppKit/AppKit.h>
+#import  <QuartzCore/QuartzCore.h>
 
 using namespace SolveSpace;
 
@@ -960,6 +961,10 @@ public:
     // TOOL window's content.
     NSSplitView         *nsSplitView = nil;
     SSSplitViewDelegate *ssSplitViewDelegate = nil;
+    // For a TOPLEVEL window: the content view of the window, which holds the
+    // split view and, above it, the progress bar.
+    NSView              *nsFrameView = nil;
+    NSView              *nsProgress  = nil;
 
     // For a TOOL window: the window it can dock into, where it is docked, whether
     // it is shown there, and its docked width.
@@ -1037,7 +1042,23 @@ public:
             nsSplitView.dividerStyle = NSSplitViewDividerStyleThick;
             nsSplitView.delegate = ssSplitViewDelegate;
             [nsSplitView addSubview:nsContainer];
-            nsWindow.contentView = nsSplitView;
+
+            // Layer-backed, so that the progress bar can be shown above the
+            // GL view, and painted while the run loop is not running.
+            nsFrameView = [[NSView alloc] init];
+            nsFrameView.wantsLayer = YES;
+            nsSplitView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+            [nsFrameView addSubview:nsSplitView];
+
+            nsProgress = [[NSView alloc] init];
+            nsProgress.wantsLayer = YES;
+            nsProgress.layer.backgroundColor =
+                [NSColor colorWithSRGBRed:0x3c/255.0 green:0x9e/255.0 blue:1.0 alpha:1.0].CGColor;
+            nsProgress.hidden = YES;
+            [nsFrameView addSubview:nsProgress];
+
+            nsWindow.contentView = nsFrameView;
+            nsSplitView.frame = nsFrameView.bounds;
         } else {
             nsWindow.contentView = nsContainer;
             if(parentWindow && parentWindow->nsSplitView) {
@@ -1354,6 +1375,27 @@ public:
 
     void Invalidate() override {
         ssView.needsDisplay = YES;
+    }
+
+    void SetProgress(double fraction) override {
+        if(nsProgress == nil) return;
+
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        if(fraction < 0) {
+            nsProgress.hidden = YES;
+        } else {
+            // Along the top of the content.
+            NSRect bounds = nsFrameView.bounds;
+            CGFloat height = 2;
+            nsProgress.frame = NSMakeRect(0, bounds.size.height - height,
+                                          bounds.size.width * std::min(1.0, fraction), height);
+            nsProgress.hidden = NO;
+        }
+        [CATransaction commit];
+        // Send the change to the window server now; the run loop, which would
+        // do that, is not running while we are busy.
+        [CATransaction flush];
     }
 };
 

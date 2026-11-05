@@ -528,6 +528,8 @@ public:
     HWND hFrame   = NULL;
     HWND hTooltip = NULL;
     HWND hEditor  = NULL;
+    // For a TOPLEVEL window: the progress bar along the top of the frame.
+    HWND hProgress = NULL;
     WNDPROC editorWndProc = NULL;
 
 #if HAVE_OPENGL == 1
@@ -600,6 +602,44 @@ public:
         registered = true;
     }
 
+    // The progress bar is a plain child window of the frame, filled with one
+    // color, that is as wide as the part of it that is done.
+    static LRESULT CALLBACK ProgressWndProc(HWND h, UINT msg, WPARAM wParam, LPARAM lParam) {
+        switch(msg) {
+            case WM_PAINT: {
+                PAINTSTRUCT ps;
+                HDC hDc = BeginPaint(h, &ps);
+                RECT rc;
+                GetClientRect(h, &rc);
+                HBRUSH hBrush = CreateSolidBrush(RGB(0x3c, 0x9e, 0xff));
+                FillRect(hDc, &rc, hBrush);
+                DeleteObject(hBrush);
+                EndPaint(h, &ps);
+                return 0;
+            }
+
+            case WM_ERASEBKGND:
+                return 1;
+
+            case WM_NCHITTEST:
+                return HTTRANSPARENT;
+        }
+        return DefWindowProcW(h, msg, wParam, lParam);
+    }
+
+    static void RegisterProgressWindowClass() {
+        static bool registered;
+        if(registered) return;
+
+        WNDCLASSEXW wc = {};
+        wc.cbSize        = sizeof(wc);
+        wc.lpfnWndProc   = ProgressWndProc;
+        wc.hCursor       = LoadCursorW(NULL, IDC_ARROW);
+        wc.lpszClassName = L"SolveSpaceProgress";
+        sscheck(RegisterClassExW(&wc));
+        registered = true;
+    }
+
     WindowImplWin32(Window::Kind kind, std::shared_ptr<WindowImplWin32> parentWindow)
             : kind(kind) {
         placement.length = sizeof(placement);
@@ -624,6 +664,11 @@ public:
                 DWORD style = WS_CHILD|WS_VISIBLE|WS_CLIPCHILDREN|WS_CLIPSIBLINGS;
                 sscheck(hWindow = CreateWindowExW(0, L"SolveSpace", L"", style,
                                                   0, 0, 0, 0, hFrame, NULL, NULL, NULL));
+
+                RegisterProgressWindowClass();
+                sscheck(hProgress = CreateWindowExW(0, L"SolveSpaceProgress", L"",
+                                                    WS_CHILD|WS_CLIPSIBLINGS,
+                                                    0, 0, 0, 0, hFrame, NULL, NULL, NULL));
                 break;
             }
 
@@ -1373,7 +1418,8 @@ public:
         if(dockSide == DockSide::NONE) {
             // Floating to docked. Remember where it was, for undocking and for saving.
             sscheck(GetWindowPlacement(hWindow, &placement));
-            style = (style & ~floatingStyle) | WS_CHILD;
+            // Clipped by its siblings, so that it does not paint over the progress bar.
+            style = (style & ~floatingStyle) | WS_CHILD | WS_CLIPSIBLINGS;
             SetWindowLongPtr(hWindow, GWL_STYLE, style);
             SetParent(hWindow, dockParent->hFrame);
         } else if(side == DockSide::NONE) {
@@ -1794,6 +1840,25 @@ public:
 
     void Invalidate() override {
         sscheck(InvalidateRect(hWindow, NULL, /*bErase=*/FALSE));
+    }
+
+    void SetProgress(double fraction) override {
+        if(hProgress == NULL) return;
+        if(fraction < 0) {
+            // The windows below get repainted when the message loop runs again.
+            ShowWindow(hProgress, SW_HIDE);
+            return;
+        }
+
+        RECT rc;
+        sscheck(GetClientRect(hFrame, &rc));
+        int width  = (int)(rc.right * std::min(1.0, fraction) + 0.5);
+        int height = std::max(2, MulDiv(2, (int)ssGetDpiForWindow(hFrame), 96));
+        SetWindowPos(hProgress, HWND_TOP, 0, 0, width, height,
+                     SWP_NOACTIVATE|SWP_SHOWWINDOW);
+        // Paint now; the message loop is not running while we are busy.
+        RedrawWindow(hProgress, NULL, NULL, RDW_INVALIDATE|RDW_UPDATENOW);
+        GdiFlush();
     }
 };
 

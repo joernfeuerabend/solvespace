@@ -67,7 +67,8 @@ target_compile_options(slvs_deps
 # platform utilities
 if(APPLE)
     target_link_libraries(slvs_deps INTERFACE
-        ${APPKIT_LIBRARY})
+        ${APPKIT_LIBRARY}
+        ${QUARTZCORE_LIBRARY})
 endif()
 
 # Solver
@@ -134,6 +135,7 @@ if(ENABLE_GUI OR ENABLE_CLI)
         exportvector.cpp
         file.cpp
         generate.cpp
+        progress.cpp
         graphicswin.cpp
         group.cpp
         groupmesh.cpp
