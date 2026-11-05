@@ -1053,7 +1053,7 @@ public:
             nsProgress = [[NSView alloc] init];
             nsProgress.wantsLayer = YES;
             nsProgress.layer.backgroundColor =
-                [NSColor colorWithSRGBRed:0x3c/255.0 green:0x9e/255.0 blue:1.0 alpha:1.0].CGColor;
+                [NSColor colorWithSRGBRed:1.0 green:0xb0/255.0 blue:0.0 alpha:1.0].CGColor;
             nsProgress.hidden = YES;
             [nsFrameView addSubview:nsProgress];
 
@@ -1387,7 +1387,7 @@ public:
         } else {
             // Along the top of the content.
             NSRect bounds = nsFrameView.bounds;
-            CGFloat height = 2;
+            CGFloat height = 3;
             nsProgress.frame = NSMakeRect(0, bounds.size.height - height,
                                           bounds.size.width * std::min(1.0, fraction), height);
             nsProgress.hidden = NO;
