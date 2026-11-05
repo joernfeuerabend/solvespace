@@ -303,11 +303,14 @@ void Group::MenuGroup(Command id, Platform::Path linkFile) {
 
         case Command::GROUP_FILLET:
         case Command::GROUP_CHAMFER: {
-            if(gs.lineSegments == 0 || gs.lineSegments != gs.n) {
+            if(gs.n == 0 || gs.lineSegments + gs.circlesOrArcs != gs.n) {
                 Error(_("Bad selection for new fillet or chamfer group. This "
                         "group can be created with:\n\n"
                         "    * one or more line segments along straight edges "
-                        "of the solid model, each between two plane faces\n"));
+                        "of the solid model, each between two plane faces\n"
+                        "    * one or more circles along circular edges of the "
+                        "solid model, each between a cylinder and a plane "
+                        "face normal to its axis\n"));
                 return;
             }
             Group *running = SK.GetRunningMeshGroupFor(SS.GW.activeGroup);

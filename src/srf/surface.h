@@ -355,6 +355,7 @@ public:
     bool CoincidentWithPlane(Vector n, double d) const;
     bool CoincidentWith(SSurface *ss, bool sameNormal) const;
     bool ContainsPlaneCurve(SCurve *sc) const;
+    bool ContainsCurve(const SCurve *sc);
     bool IsExtrusion(SBezier *of, Vector *along) const;
     bool IsCylinder(Vector *axis, Vector *center, double *r,
                         Vector *start, Vector *finish) const;

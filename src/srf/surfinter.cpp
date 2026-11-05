@@ -398,6 +398,34 @@ void SSurface::IntersectAgainst(SSurface *b, SShell *agnstA, SShell *agnstB,
                 return;
         }
 
+        if(!(degm == 1 && degn == 1) && !(b->degm == 1 && b->degn == 1)) {
+            // The same for two curved surfaces: a curve along which one of
+            // them is trimmed may lie on the other one, as where a rounding
+            // or a bevel made by revolution meets a cylinder. Where the two
+            // touch tangentially there, the marching below can't follow the
+            // grazing intersection, and where they cross, it would add the
+            // curve a second time with a different pwl.
+            bool foundExact = false;
+            for(int s = 0; s < 2 && !foundExact; s++) {
+                SSurface *sown = (s == 0) ? this : b,
+                         *soth = (s == 0) ? b : this;
+                SShell *shown = (s == 0) ? agnstA : agnstB;
+                for(SCurve &sc : shown->curve) {
+                    if(sc.source == SCurve::Source::INTERSECTION) continue;
+                    if(!sc.isExact) continue;
+                    if((sc.surfA != sown->h) && (sc.surfB != sown->h)) continue;
+                    if(soth->ContainsCurve(&sc)) {
+                        SBezier bezier = sc.exact;
+                        AddExactIntersectionCurve(&bezier, b, agnstA, agnstB,
+                                                  into);
+                        foundExact = true;
+                    }
+                }
+            }
+            if(foundExact)
+                return;
+        }
+
         // Try intersecting the surfaces numerically, by a marching algorithm.
         // First, we find all the intersections between a surface and the
         // boundary of the other surface.
@@ -602,6 +630,22 @@ bool SSurface::ContainsPlaneCurve(SCurve *sc) const {
     // check all control points on the curve
     for(int i=0; i<= sc->exact.deg; i++) {
         if(fabs(n.Dot(sc->exact.ctrl[i]) - d) > LENGTH_EPS) return false;
+    }
+    return true;
+}
+
+//-----------------------------------------------------------------------------
+// Does the exact curve sc lie on this surface?
+//-----------------------------------------------------------------------------
+bool SSurface::ContainsCurve(const SCurve *sc) {
+    if(!sc->isExact) return false;
+
+    const int n = 8;
+    for(int i = 0; i <= n; i++) {
+        Vector p = sc->exact.PointAt((double)i / n);
+        Point2d puv;
+        ClosestPointTo(p, &puv, /*mustConverge=*/false);
+        if(!PointAt(puv).Equals(p, LENGTH_EPS)) return false;
     }
     return true;
 }
