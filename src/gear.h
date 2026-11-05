@@ -21,6 +21,8 @@ public:
     double backlash;
     // Diameter of a center hole, or zero for none.
     double bore;
+    // For a rack: the thickness of its back below the root line.
+    double rackBase;
 
     static GearParams Default();
     bool Equals(const GearParams &o) const;
@@ -71,6 +73,46 @@ double GearCenterDistance(const GearParams &a, const GearParams &b);
 // in the same plane.
 double GearMatePhase(int driverTeeth, int mateTeeth, double driverPhase);
 
+// Dimensions of a rack that meshes with gears of the same module, pressure
+// angle, clearance and backlash. Its teeth have the shape of the basic rack,
+// thinner by half the backlash, with a sharp tip and a rounded root.
+class GearRackInfo {
+public:
+    double pitch;
+    double length;        // teeth times pitch
+    double addendum;      // tip above the pitch line
+    double dedendum;      // root below the pitch line
+    double height;        // tip to back
+    double filletRadius;
+    double tipWidth;      // flat of the tooth tip
+    bool   valid;
+};
+
+static const int    GEAR_RACK_MIN_TEETH = 1;
+static const int    GEAR_RACK_MAX_TEETH = 1000;
+
+GearRackInfo GearRackComputeInfo(const GearParams &gp);
+
+// Appends the closed outline of the rack with gp.teeth teeth. Its pitch line
+// starts at p0 and runs along the unit vector xd for the length of the rack,
+// the teeth point toward the unit vector yd, and the back lies gp.rackBase
+// below the root line. Both ends lie in the middle of a tooth space. All
+// lengths are multiplied by scale.
+void GearMakeRackOutline(const GearParams &gp, Vector p0, Vector xd, Vector yd,
+                         double scale, SBezierList *sbl);
+
+// Distance from the center of a gear to the pitch line of a rack that meshes
+// with it without backlash: the pitch radius plus the profile shift.
+double GearRackDistance(const GearParams &gear);
+
+// Position along the pitch line of a rack, measured from the start of the
+// rack, of the foot of the perpendicular from the gear center, for which the
+// rack meshes with the gear. footPos is the current position, toothAngle the
+// angle of a tooth middle of the gear measured counterclockwise from the
+// direction toward the rack, with the rack running counterclockwise around
+// the gear. The result is the position nearest to footPos.
+double GearRackFootPosition(const GearParams &gear, double footPos, double toothAngle);
+
 // A hub on one face of a gear, with a radial hole for a clamp screw.
 class GearHubParams {
 public:
@@ -109,14 +151,17 @@ static const bool GEAR_HUB_AFTER_ACTIVE_GROUP = true;
 // Where GearAddMate puts the sketch of the mating gear: true after the
 // active group, false after all other groups.
 static const bool GEAR_MATE_AFTER_ACTIVE_GROUP = true;
+// Where GearAddRack puts the sketch of the rack, in the same way.
+static const bool GEAR_RACK_AFTER_ACTIVE_GROUP = true;
 
 class hRequest;
 class hConstraint;
 
-// Gears made to mesh with each other share module, pressure angle,
-// clearance and backlash. After a change to the gear hr, copies these to
-// all gears linked to it, sets the distance constraints between linked
-// centers, and turns each mating gear so that its teeth mesh again.
+// Gears and racks made to mesh with each other share module, pressure
+// angle, clearance and backlash. After a change to the gear or rack hr,
+// copies these to all gears and racks linked to it, sets the distance
+// constraints between them, turns each mating gear and moves each rack so
+// that the teeth mesh again.
 void GearSyncLinked(hRequest hr);
 
 // Adds a gear with the given number of teeth that meshes with the gear
@@ -127,6 +172,19 @@ hRequest GearAddMate(hRequest driver, int teeth);
 
 // The distance constraint between the centers of two gears, if any.
 hConstraint GearFindCenterConstraint(hRequest a, hRequest b);
+
+// Adds a rack with the given number of teeth and back thickness that
+// meshes with the gear driver, below it, in a new sketch after the active
+// group (see GEAR_RACK_AFTER_ACTIVE_GROUP). The pitch line of the rack is
+// also drawn as a construction line, which has a distance constraint to the
+// center of the gear. Returns the new request, or a null handle with an
+// error shown.
+hRequest GearAddRack(hRequest driver, int teeth, double base);
+
+// The construction line on the pitch line of a rack, and the distance
+// constraint between it and the center of the gear, if any.
+hRequest GearFindRackLine(hRequest rack);
+hConstraint GearFindRackConstraint(hRequest gear, hRequest rack);
 
 // Makes the gear a solid with a hub. Gives the gear a bore for the shaft,
 // and adds after the active group (see GEAR_HUB_AFTER_ACTIVE_GROUP), which

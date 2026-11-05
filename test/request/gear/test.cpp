@@ -624,3 +624,240 @@ TEST_CASE(mate_after_active_group) {
     CHECK_TRUE(mate->solved.how == SolveResult::OKAY);
     CHECK_TRUE(Mesh(GearEntity(), SK.GetEntity(hm.entity(0)), 0.15));
 }
+
+//-----------------------------------------------------------------------------
+// Racks.
+//-----------------------------------------------------------------------------
+
+static GearParams RackParams(double m, int n, double base, double backlash = 0) {
+    GearParams gp = Params(m, n, 0, backlash);
+    gp.rackBase = base;
+    return gp;
+}
+
+// Positions along the pitch line where the outline crosses it, in order.
+static std::vector<double> PitchLineCrossings(const SBezierList &sbl) {
+    std::vector<double> xs;
+    for(const SBezier &sb : sbl.l) {
+        double y0 = sb.Start().y, y1 = sb.Finish().y;
+        if(y0 * y1 > 0 || y0 == y1) continue;
+        double lo = 0, hi = 1;
+        for(int i = 0; i < 60; i++) {
+            double mid = (lo + hi) / 2;
+            if(sb.PointAt(mid).y * y0 > 0) lo = mid; else hi = mid;
+        }
+        xs.push_back(sb.PointAt(lo).x);
+    }
+    std::sort(xs.begin(), xs.end());
+    return xs;
+}
+
+TEST_CASE(rack_dimensions) {
+    GearParams gp = RackParams(1.5, 5, 3, 0.2);
+    GearRackInfo info = GearRackComputeInfo(gp);
+    CHECK_TRUE(info.valid);
+    double p = PI * 1.5;
+    CHECK_EQ_EPS(info.pitch, p);
+    CHECK_EQ_EPS(info.length, 5 * p);
+    CHECK_EQ_EPS(info.addendum, 1.5);
+    CHECK_EQ_EPS(info.dedendum, 1.875);
+    CHECK_EQ_EPS(info.height, 1.5 + 1.875 + 3);
+    CHECK_EQ_EPS(info.filletRadius, 0.25 * 1.5 / (1 - sin(20 * PI / 180)));
+
+    SBezierList sbl = {};
+    GearMakeRackOutline(gp, Vector::From(0, 0, 0), Vector::From(1, 0, 0),
+                        Vector::From(0, 1, 0), 1.0, &sbl);
+    CHECK_TRUE(IsClosedChain(sbl, 0, sbl.l.n));
+    double xmin = VERY_POSITIVE, xmax = VERY_NEGATIVE, ymin = VERY_POSITIVE, ymax = VERY_NEGATIVE;
+    for(const SBezier &sb : sbl.l) {
+        for(int i = 0; i <= 20; i++) {
+            Vector q = sb.PointAt(i / 20.0);
+            xmin = std::min(xmin, q.x); xmax = std::max(xmax, q.x);
+            ymin = std::min(ymin, q.y); ymax = std::max(ymax, q.y);
+        }
+    }
+    CHECK_EQ_EPS(xmin, 0.0);
+    CHECK_EQ_EPS(xmax, 5 * p);
+    CHECK_EQ_EPS(ymin, -1.875 - 3);
+    CHECK_EQ_EPS(ymax, 1.5);
+
+    // Two flanks per tooth cross the pitch line, the teeth are half the
+    // pitch thick less half the backlash, and centered between the ends of
+    // the tooth spaces.
+    std::vector<double> xs = PitchLineCrossings(sbl);
+    CHECK_TRUE(xs.size() == 10);
+    for(int k = 0; k < 5; k++) {
+        CHECK_EQ_EPS(xs[2*k + 1] - xs[2*k], p / 2 - 0.1);
+        CHECK_EQ_EPS((xs[2*k + 1] + xs[2*k]) / 2, (k + 0.5) * p);
+    }
+    sbl.Clear();
+
+    // Without clearance there is no fillet, and the outline is still closed.
+    gp.clearance = 0;
+    CHECK_TRUE(GearRackComputeInfo(gp).valid);
+    GearMakeRackOutline(gp, Vector::From(0, 0, 0), Vector::From(1, 0, 0),
+                        Vector::From(0, 1, 0), 1.0, &sbl);
+    CHECK_TRUE(IsClosedChain(sbl, 0, sbl.l.n));
+    sbl.Clear();
+}
+
+TEST_CASE(rack_invalid_parameters) {
+    CHECK_FALSE(GearRackComputeInfo(RackParams(1.5, 5, 0)).valid);
+    CHECK_FALSE(GearRackComputeInfo(RackParams(1.5, 0, 3)).valid);
+    CHECK_FALSE(GearRackComputeInfo(RackParams(0, 5, 3)).valid);
+    CHECK_TRUE(GearRackComputeInfo(RackParams(1.5, 1, 3)).valid);
+}
+
+TEST_CASE(rack_foot_position) {
+    GearParams gp = Params(2, 20);
+    double p = PI * 2;
+    // A tooth pointing at the rack faces a tooth space.
+    CHECK_EQ_EPS(GearRackFootPosition(gp, 0.1, 0), 0.0);
+    CHECK_EQ_EPS(GearRackFootPosition(gp, 3 * p + 0.2, 0), 3 * p);
+    // Turning the gear by one tooth moves the rack by one pitch.
+    CHECK_EQ_EPS(GearRackFootPosition(gp, 0, 2 * PI / 20), 0.0);
+    CHECK_EQ_EPS(GearRackFootPosition(gp, 0, 0.05), -20 * 0.05);
+    CHECK_EQ_EPS(GearRackDistance(Params(2, 20, 0.3)), 20.6);
+}
+
+static double RackPitchLineDistance(hRequest hr) {
+    Vector a = SK.GetEntity(hr.entity(1))->PointGetNum(),
+           b = SK.GetEntity(hr.entity(2))->PointGetNum();
+    Vector d = b.Minus(a).WithMagnitude(1);
+    Vector c = SK.GetEntity(GEAR_REQUEST.entity(1))->PointGetNum();
+    Vector f = a.Plus(d.ScaledBy(c.Minus(a).Dot(d)));
+    return c.Minus(f).Magnitude();
+}
+
+TEST_CASE(rack) {
+    CHECK_LOAD("normal.slvs");
+    hRequest hr = GearAddRack(GEAR_REQUEST, 12, 3);
+    CHECK_TRUE(hr.v != 0);
+    SS.GenerateAll(SolveSpaceUI::Generate::ALL);
+    Request *rack = SK.GetRequest(hr);
+    CHECK_TRUE(rack->type == Request::Type::GEAR_RACK);
+    CHECK_TRUE(rack->gearDriver == GEAR_REQUEST);
+    CHECK_TRUE(rack->gear.teeth == 12);
+    CHECK_EQ_EPS(rack->gear.rackBase, 3.0);
+    CHECK_EQ_EPS(rack->gear.module, 1.5);
+    Group *g = SK.GetGroup(rack->group);
+    CHECK_TRUE(g->name == "rack");
+    CHECK_TRUE(g->solved.how == SolveResult::OKAY);
+    CHECK_TRUE(SS.GW.activeGroup == g->h);
+
+    hRequest hl = GearFindRackLine(hr);
+    CHECK_TRUE(hl.v != 0);
+    CHECK_TRUE(SK.GetRequest(hl)->construction);
+    hConstraint hc = GearFindRackConstraint(GEAR_REQUEST, hr);
+    CHECK_TRUE(hc != Constraint::NO_CONSTRAINT);
+    CHECK_EQ_EPS(fabs(SK.GetConstraint(hc)->valA), 15.0);
+    CHECK_EQ_EPS(RackPitchLineDistance(hr), 15.0);
+    Vector a = SK.GetEntity(hr.entity(1))->PointGetNum(),
+           b = SK.GetEntity(hr.entity(2))->PointGetNum();
+    CHECK_EQ_EPS(a.Minus(b).Magnitude(), 12 * PI * 1.5);
+    CHECK_TRUE(Mesh(GearEntity(), SK.GetEntity(hr.entity(0)), 0.15));
+
+    // A change of the gear carries over to the rack, which moves to the new
+    // distance and still meshes.
+    Request *gear = SK.GetRequest(GEAR_REQUEST);
+    gear->gear.module = 2;
+    gear->gear.profileShift = 0.3;
+    gear->gear.backlash = 0.1;
+    GearSyncLinked(GEAR_REQUEST);
+    SS.GenerateAll(SolveSpaceUI::Generate::ALL);
+    rack = SK.GetRequest(hr);
+    CHECK_EQ_EPS(rack->gear.module, 2.0);
+    CHECK_EQ_EPS(rack->gear.backlash, 0.1);
+    CHECK_EQ_EPS(rack->gear.profileShift, 0.0);
+    CHECK_EQ_EPS(fabs(SK.GetConstraint(hc)->valA), 20.6);
+    CHECK_EQ_EPS(RackPitchLineDistance(hr), 20.6);
+    CHECK_TRUE(Mesh(GearEntity(), SK.GetEntity(hr.entity(0)), 0.1));
+
+    // So does a new number of teeth of the rack.
+    rack->gear.teeth = 7;
+    GearSyncLinked(hr);
+    SS.GenerateAll(SolveSpaceUI::Generate::ALL);
+    a = SK.GetEntity(hr.entity(1))->PointGetNum();
+    b = SK.GetEntity(hr.entity(2))->PointGetNum();
+    CHECK_EQ_EPS(a.Minus(b).Magnitude(), 7 * PI * 2);
+    CHECK_TRUE(Mesh(GearEntity(), SK.GetEntity(hr.entity(0)), 0.1));
+    CHECK_TRUE(SK.GetGroup(SK.GetRequest(hr)->group)->solved.how == SolveResult::OKAY);
+}
+
+// A gear turned by an odd angle still gets a meshing rack, also after the
+// rack was moved along and around the gear.
+TEST_CASE(rack_turned) {
+    CHECK_LOAD("normal.slvs");
+    for(Constraint &c : SK.constraint) {
+        if(c.type == Constraint::Type::HORIZONTAL) c.tag = 1;
+    }
+    SK.constraint.RemoveTagged();
+    SK.GetEntity(GEAR_REQUEST.entity(2))->PointForceTo(
+        Vector::From(15 * cos(0.37), 15 * sin(0.37), 0));
+    SS.MarkGroupDirty(SS.GW.activeGroup);
+    SS.GenerateAll(SolveSpaceUI::Generate::ALL);
+    hGroup sketch = SS.GW.activeGroup;
+
+    hRequest hr = GearAddRack(GEAR_REQUEST, 9, 2);
+    SS.GenerateAll(SolveSpaceUI::Generate::ALL);
+    CHECK_TRUE(Mesh(GearEntity(), SK.GetEntity(hr.entity(0)), 0.15));
+
+    // Turn the rack around the gear and slide it along, as a drag would,
+    // then bring it back into mesh.
+    hRequest hl = GearFindRackLine(hr);
+    Quaternion turn = Quaternion::From(Vector::From(0, 0, 1), 1.1);
+    for(int i = 1; i <= 2; i++) {
+        Vector q = turn.Rotate(SK.GetEntity(hr.entity(i))->PointGetNum())
+                       .Plus(Vector::From(0.8, -0.3, 0));
+        SK.GetEntity(hr.entity(i))->PointForceTo(q);
+        SK.GetEntity(hl.entity(i))->PointForceTo(q);
+    }
+    GearSyncLinked(GEAR_REQUEST);
+    SS.GenerateAll(SolveSpaceUI::Generate::ALL);
+    CHECK_EQ_EPS(RackPitchLineDistance(hr), 15.0);
+    CHECK_TRUE(Mesh(GearEntity(), SK.GetEntity(hr.entity(0)), 0.15));
+
+    // A group before the sketch of the gear cannot take a rack.
+    if(GEAR_RACK_AFTER_ACTIVE_GROUP) {
+        SS.GW.activeGroup = Group::HGROUP_REFERENCES;
+        CHECK_TRUE(GearAddRack(GEAR_REQUEST, 9, 2).v == 0);
+        SS.GW.activeGroup = sketch;
+    }
+    CHECK_TRUE(GearAddRack(GEAR_REQUEST, 9, 0).v == 0);
+    CHECK_TRUE(GearAddRack(GEAR_REQUEST, 0, 2).v == 0);
+}
+
+// The extruded rack is a closed solid with the volume of its outline times
+// the depth.
+TEST_CASE(rack_extrude) {
+    CHECK_LOAD("normal.slvs");
+    hRequest hr = GearAddRack(GEAR_REQUEST, 6, 3);
+    SS.GenerateAll(SolveSpaceUI::Generate::ALL);
+    std::vector<Vector> pts;
+    Polyline(SK.GetEntity(hr.entity(0)), &pts);
+    double area = 0;
+    for(size_t i = 0, j = pts.size() - 1; i < pts.size(); j = i++) {
+        area += pts[j].x * pts[i].y - pts[i].x * pts[j].y;
+    }
+    area = fabs(area) / 2;
+    AddExtrusion(5);
+    Group *g = SK.GetGroup(SS.GW.activeGroup);
+    g->GenerateDisplayItems();
+    CHECK_TRUE(IsWatertight(&g->displayMesh));
+    CHECK_TRUE(fabs(g->displayMesh.CalculateVolume() / (area * 5) - 1) < 2e-3);
+}
+
+TEST_CASE(rack_roundtrip) {
+    CHECK_LOAD("rack.slvs");
+    bool found = false;
+    for(Request &r : SK.request) {
+        if(r.type != Request::Type::GEAR_RACK) continue;
+        found = true;
+        CHECK_TRUE(r.gearDriver == GEAR_REQUEST);
+        CHECK_TRUE(r.gear.teeth == 12);
+        CHECK_EQ_EPS(r.gear.rackBase, 3.0);
+        CHECK_TRUE(Mesh(GearEntity(), SK.GetEntity(r.h.entity(0)), 0.15));
+    }
+    CHECK_TRUE(found);
+    CHECK_SAVE("rack.slvs");
+}

@@ -594,6 +594,7 @@ void TextWindow::Show() {
             case Screen::EDIT_VIEW:          ShowEditView();         break;
             case Screen::TANGENT_ARC:        ShowTangentArc();       break;
             case Screen::GEAR_HUB:           ShowGearHub();          break;
+            case Screen::GEAR_RACK:          ShowGearRack();         break;
         }
     }
     Printf(false, "");
