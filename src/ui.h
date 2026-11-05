@@ -461,6 +461,7 @@ public:
     int    gearRackTeeth;
     double gearRackBase;
     static void ScreenGearRackSolid(int link, uint32_t v);
+    static void ScreenGearRackBackLines(int link, uint32_t v);
     static void ScreenChangeGearRackSolid(int link, uint32_t v);
     static void ScreenCreateGearRackSolid(int link, uint32_t v);
     GearRackSolidParams gearRackSolid;

@@ -568,6 +568,45 @@ double SignedLineDistance(hEntity wrkpl, Vector c, Vector a, Vector b) {
     return (dv * a.Minus(c).Dot(u) - du * a.Minus(c).Dot(v)) / m;
 }
 
+// Distance from the pitch line of a rack to its back.
+double RackDepth(const GearParams &gp) {
+    return (1 + gp.clearance) * gp.module + gp.rackBase;
+}
+
+// Moves the construction lines along the ends and the back of the rack to
+// where its outline has them, and sets the lengths of the end lines.
+void PlaceRackBackLines(Request *rack) {
+    Vector p0 = SK.GetEntity(rack->h.entity(1))->PointGetNum(),
+           p1 = SK.GetEntity(rack->h.entity(2))->PointGetNum();
+    Vector xd = p1.Minus(p0);
+    if(xd.Magnitude() < LENGTH_EPS) return;
+    Vector n = SK.GetEntity(rack->workplane)->Normal()->NormalN();
+    Vector yd = n.Cross(xd).WithMagnitude(1);
+    double depth = RackDepth(rack->gear);
+    Vector b0 = p0.Minus(yd.ScaledBy(depth)),
+           b1 = p1.Minus(yd.ScaledBy(depth));
+
+    for(hRequest hl : { GearFindRackBackLine(rack->h), GearFindRackEndLine(rack->h) }) {
+        if(hl.v == 0) continue;
+        bool atEnd = (hl == GearFindRackEndLine(rack->h));
+        SK.GetEntity(hl.entity(1))->PointForceTo(atEnd ? p1 : p0);
+        SK.GetEntity(hl.entity(2))->PointForceTo(atEnd ? b1 : b0);
+        for(Constraint &cn : SK.constraint) {
+            if(cn.type != Constraint::Type::PT_PT_DISTANCE) continue;
+            if(!((cn.ptA == hl.entity(1) && cn.ptB == hl.entity(2)) ||
+                 (cn.ptA == hl.entity(2) && cn.ptB == hl.entity(1)))) continue;
+            cn.valA = depth;
+            SS.MarkGroupDirty(cn.group);
+        }
+    }
+    hRequest he = GearFindRackBackEdge(rack->h);
+    if(he.v != 0) {
+        SK.GetEntity(he.entity(1))->PointForceTo(b0);
+        SK.GetEntity(he.entity(2))->PointForceTo(b1);
+    }
+    SS.MarkGroupDirty(rack->group);
+}
+
 // Moves the rack to the distance from the driver at which it meshes, keeps
 // its direction, and slides it along its pitch line so that its teeth mesh
 // with those of the driver. The construction line on the pitch line and
@@ -599,20 +638,8 @@ void PlaceRack(Request *driver, Request *rack) {
     SK.GetEntity(rack->h.entity(1))->PointForceTo(q0);
     SK.GetEntity(rack->h.entity(2))->PointForceTo(q1);
 
-    // The construction line to the back, if any, and its length.
-    hRequest hb = GearFindRackBackLine(rack->h);
-    if(hb.v != 0) {
-        double depth = (1 + rack->gear.clearance) * rack->gear.module + rack->gear.rackBase;
-        SK.GetEntity(hb.entity(1))->PointForceTo(q0);
-        SK.GetEntity(hb.entity(2))->PointForceTo(q0.Minus(yd.ScaledBy(depth)));
-        for(Constraint &cn : SK.constraint) {
-            if(cn.type != Constraint::Type::PT_PT_DISTANCE) continue;
-            if(!((cn.ptA == hb.entity(1) && cn.ptB == hb.entity(2)) ||
-                 (cn.ptA == hb.entity(2) && cn.ptB == hb.entity(1)))) continue;
-            cn.valA = depth;
-            SS.MarkGroupDirty(cn.group);
-        }
-    }
+    // The construction lines along the ends and the back follow.
+    PlaceRackBackLines(rack);
 
     hRequest hl = GearFindRackLine(rack->h);
     if(hl.v == 0) return;
@@ -665,6 +692,33 @@ hRequest GearFindRackBackLine(hRequest rack) {
     return FindRackLine(rack, /*toEnd=*/false);
 }
 
+hRequest GearFindRackEndLine(hRequest rack) {
+    Request *rr = SK.request.FindByIdNoOops(rack);
+    if(rr == NULL) return {};
+    for(const Request &r : SK.request) {
+        if(r.type != Request::Type::LINE_SEGMENT || r.group != rr->group) continue;
+        if(PointsCoincident(r.h.entity(1), rack.entity(2))) return r.h;
+    }
+    return {};
+}
+
+hRequest GearFindRackBackEdge(hRequest rack) {
+    hRequest hb = GearFindRackBackLine(rack), he = GearFindRackEndLine(rack);
+    if(hb.v == 0 || he.v == 0) return {};
+    Request *rr = SK.GetRequest(rack);
+    for(const Request &r : SK.request) {
+        if(r.type != Request::Type::LINE_SEGMENT || r.group != rr->group) continue;
+        if(PointsCoincident(r.h.entity(1), hb.entity(2)) &&
+           PointsCoincident(r.h.entity(2), he.entity(2))) return r.h;
+    }
+    return {};
+}
+
+bool GearRackHasBackLines(hRequest rack) {
+    return GearFindRackBackLine(rack).v != 0 && GearFindRackEndLine(rack).v != 0 &&
+           GearFindRackBackEdge(rack).v != 0;
+}
+
 hConstraint GearFindRackConstraint(hRequest gear, hRequest rack) {
     hRequest hl = GearFindRackLine(rack);
     if(hl.v == 0) return Constraint::NO_CONSTRAINT;
@@ -703,6 +757,7 @@ void GearSyncLinked(hRequest hr) {
         r->gear.clearance     = src->gear.clearance;
         r->gear.backlash      = src->gear.backlash;
         SS.MarkGroupDirty(r->group);
+        if(r->type == Request::Type::GEAR_RACK) PlaceRackBackLines(r);
     }
     // Drivers before their mates, so that each mate follows a driver that
     // is in place already.
@@ -925,6 +980,7 @@ hRequest GearAddRack(hRequest hd, int teeth, double base, std::string *error) {
     cd.disp.offset = u.ScaledBy(-gp.module * 4);
     Constraint::AddConstraint(&cd, /*rememberForUndo=*/false);
 
+    GearAddRackBackLines(hr, error);
     PlaceRack(SK.GetRequest(hd), SK.GetRequest(hr));
     SS.MarkGroupDirty(hs);
     return hr;
@@ -1276,6 +1332,56 @@ hRequest AddPlacedCircle(hEntity line, hEntity start, Vector center, double diam
 
 }
 
+bool GearAddRackBackLines(hRequest hr, std::string *error) {
+    Request *r = SK.request.FindByIdNoOops(hr);
+    if(r == NULL || r->type != Request::Type::GEAR_RACK) {
+        *error = _("The rack no longer exists.");
+        return false;
+    }
+    if(GearRackHasBackLines(hr)) return true;
+    hRequest pitch = GearFindRackLine(hr);
+    if(pitch.v == 0) {
+        *error = _("The pitch line of the rack is missing.");
+        return false;
+    }
+    hGroup sketch = r->group;
+    if(SK.GetGroup(sketch)->type != Group::Type::DRAWING_WORKPLANE) {
+        *error = _("The rack must be drawn in a sketch in a workplane.");
+        return false;
+    }
+    double depth = RackDepth(r->gear);
+    hGroup active = SS.GW.activeGroup;
+    SS.GW.activeGroup = sketch;
+
+    // From a point on the pitch line, perpendicular to it, to the back.
+    auto addEndLine = [&](hEntity start) {
+        hRequest hl = SS.GW.AddRequest(Request::Type::LINE_SEGMENT, /*rememberForUndo=*/false);
+        SK.GetRequest(hl)->construction = true;
+        AddConstraint(Constraint::Type::POINTS_COINCIDENT, start, hl.entity(1),
+                      Entity::NO_ENTITY);
+        AddLineConstraint(Constraint::Type::PERPENDICULAR, hl.entity(0), pitch.entity(0));
+        AddConstraint(Constraint::Type::PT_PT_DISTANCE, hl.entity(1), hl.entity(2),
+                      Entity::NO_ENTITY, depth);
+        return hl;
+    };
+    hRequest hb = GearFindRackBackLine(hr);
+    if(hb.v == 0) hb = addEndLine(hr.entity(1));
+    hRequest he = GearFindRackEndLine(hr);
+    if(he.v == 0) he = addEndLine(hr.entity(2));
+    if(GearFindRackBackEdge(hr).v == 0) {
+        hRequest hk = SS.GW.AddRequest(Request::Type::LINE_SEGMENT, /*rememberForUndo=*/false);
+        SK.GetRequest(hk)->construction = true;
+        AddConstraint(Constraint::Type::POINTS_COINCIDENT, hb.entity(2), hk.entity(1),
+                      Entity::NO_ENTITY);
+        AddConstraint(Constraint::Type::POINTS_COINCIDENT, he.entity(2), hk.entity(2),
+                      Entity::NO_ENTITY);
+    }
+    PlaceRackBackLines(SK.GetRequest(hr));
+    SS.GW.activeGroup = active;
+    SS.MarkGroupDirty(sketch);
+    return true;
+}
+
 bool GearAddRackSolid(hRequest hr, const GearRackSolidParams &sp, std::string *error) {
     using Mount = GearRackSolidParams::Mount;
     Request *r = SK.request.FindByIdNoOops(hr);
@@ -1316,8 +1422,8 @@ bool GearAddRackSolid(hRequest hr, const GearRackSolidParams &sp, std::string *e
         insertAfter = active->h;
     }
 
-    // The new back thickness moves the construction line to the back, if
-    // there is one.
+    // The new back thickness moves the construction lines along the back,
+    // if there are any.
     r->gear.rackBase = sp.base;
     SS.MarkGroupDirty(sketch);
     GearSyncLinked(hr);
@@ -1333,23 +1439,11 @@ bool GearAddRackSolid(hRequest hr, const GearRackSolidParams &sp, std::string *e
     double len = PI * r->gear.module * r->gear.teeth;
     double hf = (1 + r->gear.clearance) * r->gear.module;
 
-    if(sp.mount == Mount::INSERT && GearFindRackBackLine(hr).v == 0) {
-        // A construction line from the start of the pitch line to the back,
-        // as the origin of the sketch of the holes.
-        SS.GW.activeGroup = sketch;
-        hRequest hb = SS.GW.AddRequest(Request::Type::LINE_SEGMENT, /*rememberForUndo=*/false);
-        SK.GetRequest(hb)->construction = true;
-        double depth = hf + sp.base;
-        SK.GetEntity(hb.entity(1))->PointForceTo(p0);
-        SK.GetEntity(hb.entity(2))->PointForceTo(p0.Minus(yd.ScaledBy(depth)));
-        AddConstraint(Constraint::Type::POINTS_COINCIDENT, hr.entity(1), hb.entity(1),
-                      Entity::NO_ENTITY);
-        AddLineConstraint(Constraint::Type::PERPENDICULAR, hb.entity(0), pitch.entity(0));
-        AddConstraint(Constraint::Type::PT_PT_DISTANCE, hb.entity(1), hb.entity(2),
-                      Entity::NO_ENTITY, depth);
-        SS.MarkGroupDirty(sketch);
-        SS.GenerateAll(SolveSpaceUI::Generate::DIRTY);
-    }
+    // Construction lines along the ends and the back, which give the faces
+    // there points and edges to draw on. The one from the start of the pitch
+    // line is the origin of the sketch of the insert holes.
+    if(!GearAddRackBackLines(hr, error)) return false;
+    SS.GenerateAll(SolveSpaceUI::Generate::DIRTY);
     SS.GW.activeGroup = insertAfter;
 
     Group *body = AddExtrusion(sketch, hr.entity(1), n.ScaledBy(sp.width),

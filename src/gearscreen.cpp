@@ -574,6 +574,23 @@ void TextWindow::DescribeGearRack(Entity *e) {
     }
     Printf(true, "  %Fl%Ls%f%D[make solid with mounting holes]%E",
            &ScreenGearRackSolid, hv);
+    if(!GearRackHasBackLines(r->h)) {
+        Printf(false, "  %Fl%Ls%f%D[add construction lines along ends and back]%E",
+               &ScreenGearRackBackLines, hv);
+    }
+}
+
+void TextWindow::ScreenGearRackBackLines(int link, uint32_t v) {
+    hRequest hr = { v };
+    if(SK.request.FindByIdNoOops(hr) == NULL) return;
+    SS.UndoRemember();
+    std::string error;
+    if(!GearAddRackBackLines(hr, &error)) {
+        Error("%s", error.c_str());
+        return;
+    }
+    SS.GenerateAll(SolveSpaceUI::Generate::DIRTY);
+    SS.ScheduleShowTW();
 }
 
 //-----------------------------------------------------------------------------

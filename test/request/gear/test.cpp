@@ -984,7 +984,7 @@ TEST_CASE(rack_solid_cross_holes) {
     hRequest hr = SolidRack(GearRackSolidParams::Mount::CROSS, &sp, &error);
     CHECK_TRUE(hr.v != 0);
     CHECK_EQ_EPS(SK.GetRequest(hr)->gear.rackBase, 6.0);
-    CHECK_TRUE(GearFindRackBackLine(hr).v == 0);
+    CHECK_TRUE(GearRackHasBackLines(hr));
     CHECK_TRUE(GroupNamed("rack-holes-sketch")->solved.dof == 0);
     Group *last = GroupNamed("rack-holes");
     last->GenerateDisplayItems();
@@ -1028,4 +1028,100 @@ TEST_CASE(rack_solid_plain) {
     // A second solid of the same rack is refused.
     CHECK_FALSE(GearAddRackSolid(hr, sp, &error));
     CHECK_FALSE(error.empty());
+}
+
+// Corners of the back of a rack: where the construction lines along its ends
+// meet the line along its back.
+static void RackBackCorners(hRequest hr, Vector *b0, Vector *b1) {
+    hRequest he = GearFindRackBackEdge(hr);
+    *b0 = SK.GetEntity(he.entity(1))->PointGetNum();
+    *b1 = SK.GetEntity(he.entity(2))->PointGetNum();
+}
+
+TEST_CASE(rack_back_lines) {
+    CHECK_LOAD("normal.slvs");
+    std::string error;
+    hRequest hr = GearAddRack(GEAR_REQUEST, 12, 3, &error);
+    CHECK_TRUE(hr.v != 0);
+    SS.GenerateAll(SolveSpaceUI::Generate::ALL);
+    CHECK_TRUE(GearRackHasBackLines(hr));
+    for(hRequest hl : { GearFindRackBackLine(hr), GearFindRackEndLine(hr),
+                        GearFindRackBackEdge(hr) }) {
+        CHECK_TRUE(SK.GetRequest(hl)->construction);
+    }
+    // The rack can still slide along and turn around the gear, as without
+    // the lines, which are fixed to it.
+    Group *g = SK.GetGroup(SK.GetRequest(hr)->group);
+    CHECK_TRUE(g->solved.how == SolveResult::OKAY);
+    CHECK_TRUE(g->solved.dof == 2);
+
+    // The back lies 1.875 + 3 mm below the pitch line, 15 mm below the gear
+    // center, and is as long as the rack.
+    Vector b0, b1;
+    RackBackCorners(hr, &b0, &b1);
+    Vector p0 = SK.GetEntity(hr.entity(1))->PointGetNum(),
+           p1 = SK.GetEntity(hr.entity(2))->PointGetNum();
+    CHECK_EQ_EPS(b0.y, -15 - 1.875 - 3);
+    CHECK_EQ_EPS(b1.y, -15 - 1.875 - 3);
+    CHECK_EQ_EPS(b0.x, p0.x);
+    CHECK_EQ_EPS(b1.x, p1.x);
+
+    // They follow a new back thickness, module and number of teeth.
+    Request *rack = SK.GetRequest(hr);
+    rack->gear.rackBase = 5;
+    rack->gear.teeth = 8;
+    GearSyncLinked(hr);
+    SS.GenerateAll(SolveSpaceUI::Generate::ALL);
+    SK.GetRequest(GEAR_REQUEST)->gear.module = 2;
+    GearSyncLinked(GEAR_REQUEST);
+    SS.GenerateAll(SolveSpaceUI::Generate::ALL);
+    RackBackCorners(hr, &b0, &b1);
+    p0 = SK.GetEntity(hr.entity(1))->PointGetNum();
+    p1 = SK.GetEntity(hr.entity(2))->PointGetNum();
+    CHECK_EQ_EPS(b0.y, -20 - 2.5 - 5);
+    CHECK_EQ_EPS(b1.y, -20 - 2.5 - 5);
+    CHECK_EQ_EPS(b1.Minus(b0).Magnitude(), 8 * PI * 2);
+    CHECK_EQ_EPS(b0.x, p0.x);
+    CHECK_EQ_EPS(b1.x, p1.x);
+    CHECK_TRUE(SK.GetGroup(SK.GetRequest(hr)->group)->solved.how == SolveResult::OKAY);
+
+    // Extruded, the back is a face of its own, which a workplane can be
+    // placed on with a corner and two edges.
+    AddExtrusion(5);
+    Group *body = SK.GetGroup(SS.GW.activeGroup);
+    body->GenerateDisplayItems();
+    CHECK_TRUE(IsWatertight(&body->displayMesh));
+    hEntity face = body->Remap(GearFindRackBackEdge(hr).entity(0), Group::REMAP_LINE_TO_FACE);
+    int onBack = 0;
+    for(const STriangle &t : body->displayMesh.l) {
+        if(t.meta.face != face.v) continue;
+        onBack++;
+        for(const Vector &p : { t.a, t.b, t.c }) CHECK_EQ_EPS(p.y, -20 - 2.5 - 5);
+    }
+    CHECK_TRUE(onBack > 0);
+}
+
+// A rack from a file made before the lines were added gets them on request.
+TEST_CASE(rack_back_lines_added) {
+    CHECK_LOAD("rack.slvs");
+    hRequest hr = {};
+    for(Request &r : SK.request) {
+        if(r.type == Request::Type::GEAR_RACK) hr = r.h;
+    }
+    CHECK_TRUE(hr.v != 0);
+    CHECK_FALSE(GearRackHasBackLines(hr));
+    int dof = SK.GetGroup(SK.GetRequest(hr)->group)->solved.dof;
+    hGroup active = SS.GW.activeGroup;
+    std::string error;
+    CHECK_TRUE(GearAddRackBackLines(hr, &error));
+    SS.GenerateAll(SolveSpaceUI::Generate::ALL);
+    CHECK_TRUE(GearRackHasBackLines(hr));
+    CHECK_TRUE(SS.GW.activeGroup == active);
+    Group *g = SK.GetGroup(SK.GetRequest(hr)->group);
+    CHECK_TRUE(g->solved.how == SolveResult::OKAY);
+    CHECK_TRUE(g->solved.dof == dof);
+    Vector b0, b1;
+    RackBackCorners(hr, &b0, &b1);
+    CHECK_EQ_EPS(b0.y, -15 - 1.875 - 3);
+    CHECK_EQ_EPS(b1.Minus(b0).Magnitude(), 12 * PI * 1.5);
 }
